@@ -1652,8 +1652,10 @@ function renderDrawer() {
   $('#dlBadge').textContent = running; $('#dlBadge').hidden = !running;
   $('#dlDir').textContent = dir || '';
   // Downloads can't run (e.g. the torlink window is open): say so at the top of the panel and on the button.
-  const eng = lastDl?.engineError;
-  $('#engineWarn').hidden = !eng; $('#engineWarn').textContent = eng ? '⚠ ' + eng : '';
+  // the engine's trouble, and torrents the PC refused (they held a program, or no video)
+  const eng = lastDl?.engineError, blk = (lastDl?.blocked || []).map((b) => `🛡 Stopped and deleted "${b.title}": ${b.reason}.`);
+  const warn = [eng ? '⚠ ' + eng : '', ...blk].filter(Boolean).join('\n');
+  $('#engineWarn').hidden = !warn; $('#engineWarn').textContent = warn; $('#engineWarn').style.whiteSpace = 'pre-line';
   $('#dlBtn').classList.toggle('warn', !!eng);
   const thumb = (p) => p ? `<img src="${IMG}w92${p}" alt="">` : '<div class="ph"></div>';
   const act = active.map((d) => {

@@ -33,6 +33,22 @@ TV open it over your home Wi-Fi or over Tailscale.
   HEVC gets a 720p H.264 copy.
 - Play on TV: send what you're watching to the TV app and use the phone as the remote.
 - Disk view: free space, and watched downloads you can clear (they go to a bin first).
+- Download guard: only films, episodes and their subtitles get through (see below).
+
+## Download guard
+
+Torrents sometimes hide a program next to the video (a "codec" `setup.exe`, a `.lnk` shortcut, a
+`Movie.mkv.exe`). Moonvies never runs anything it downloads, and on top of that it checks every torrent:
+
+1. As soon as torlink has a torrent's file list (before the data arrives), Moonvies reads it. If any
+   file can run (`.exe`, `.msi`, `.bat`, `.cmd`, `.scr`, `.lnk`, `.vbs`, `.js`, `.ps1`, `.jar`, `.apk`,
+   `.sh`, `.dll`, `.deb`, `.dmg` and similar, also with tricks like a trailing dot), or there's no video
+   in it at all, the torrent is stopped and its files deleted. The Downloads drawer says which one and why.
+2. When a download finishes, every file that isn't video, subtitles (`.srt`, `.ass`, `.ssa`, `.vtt`,
+   `.sub`/`.idx`, `.sup`) or a harmless extra (cover images, `.nfo`, `.txt`) is deleted, so archives,
+   disc images and web pages don't stay on the disk.
+
+The lists are at the top of the guard section in `server.mjs` (`KEEP_EXT`, `RUNNABLE_EXT`).
 
 ## Step by step
 

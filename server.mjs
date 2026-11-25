@@ -4,7 +4,7 @@
 //   downloads, reports progress, and opens finished downloads in the default player.
 import { createServer } from 'node:http';
 import { readFile, writeFile, stat, readdir, mkdir, rename, rm, statfs } from 'node:fs/promises';
-import { existsSync, createReadStream, openSync, closeSync, readdirSync } from 'node:fs';
+import { existsSync, createReadStream, openSync, closeSync, readdirSync, readFileSync } from 'node:fs';
 import { inflateRawSync } from 'node:zlib';
 import { extname, join, normalize, resolve, sep, basename, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -731,6 +731,91 @@ setInterval(async () => {
   }
 }, 3000);
 
+/* ---------- download guard: films, episodes and their subtitles only ---------- */
+// A torrent can carry a program next to (or instead of) the video. torlink saves a torrent's
+// .torrent file as soon as it has the file list, before the data comes: if that list holds
+// anything that can run, or no video at all, the torrent is stopped and its files deleted.
+// When a download finishes, every file that isn't video, subtitles or a harmless extra goes.
+const KEEP_EXT = new Set([...VIDEO, ...SUB_EXT, '.sub', '.idx', '.sup', '.jpg', '.jpeg', '.png', '.webp', '.nfo', '.txt']);
+const RUNNABLE_EXT = new Set(['.exe', '.msi', '.msp', '.msix', '.appx', '.bat', '.cmd', '.com', '.scr', '.pif', '.cpl', '.lnk', '.url', '.vbs', '.vbe',
+  '.js', '.jse', '.mjs', '.wsf', '.wsh', '.ps1', '.psm1', '.hta', '.jar', '.apk', '.xapk', '.appimage', '.sh', '.run', '.dll', '.sys', '.reg',
+  '.desktop', '.app', '.dmg', '.pkg', '.deb', '.rpm', '.py', '.pl', '.elf', '.out', '.inf', '.gadget', '.application', '.scf', '.ocx', '.drv']);
+const TORRENT_DIR = join(DATA_DIR, 'torrents');
+const blockedLog = []; // { title, reason, at } shown in the downloads drawer
+
+// The smallest bencode reader that gets a torrent's file names out (strings stay bytes).
+function bdecode(buf) {
+  let i = 0;
+  const next = () => {
+    const c = buf[i];
+    if (c === 0x69) { const e = buf.indexOf(0x65, i); const n = Number(buf.toString('latin1', i + 1, e)); i = e + 1; return n; } // i...e
+    if (c === 0x6c) { i++; const l = []; while (buf[i] !== 0x65) l.push(next()); i++; return l; } // l...e
+    if (c === 0x64) { i++; const d = {}; while (buf[i] !== 0x65) { const k = next().toString('latin1'); d[k] = next(); } i++; return d; } // d...e
+    const colon = buf.indexOf(0x3a, i); const len = Number(buf.toString('latin1', i, colon)); // <len>:<bytes>
+    if (!Number.isFinite(len) || colon < 0) throw new Error('bad torrent');
+    const s = buf.subarray(colon + 1, colon + 1 + len); i = colon + 1 + len; return s;
+  };
+  return next();
+}
+function torrentFiles(file) {
+  const t = bdecode(readFileSync(file)), info = t.info || {};
+  const str = (b) => (Buffer.isBuffer(b) ? b.toString('utf8') : String(b ?? ''));
+  const name = str(info['name.utf-8'] || info.name);
+  const files = Array.isArray(info.files)
+    ? info.files.map((f) => [name, ...(f['path.utf-8'] || f.path || []).map(str)].join('/'))
+    : [name];
+  return { name, files };
+}
+const extOf = (f) => extname(f.replace(/[\s.]+$/, '')).toLowerCase(); // "film.exe " and "film.exe." count as .exe
+function verdict(files) {
+  const runnable = files.filter((f) => RUNNABLE_EXT.has(extOf(f)));
+  if (runnable.length) return `it contains a program or script (${basename(runnable[0])})`;
+  if (!files.some((f) => VIDEO.has(extOf(f)))) return 'it has no video in it';
+  return null;
+}
+const guarded = new Set(), cleaned = new Set(); // checked this run
+let guardBusy = false;
+setInterval(async () => {
+  if (guardBusy || !(await torHealthy())) return;
+  guardBusy = true;
+  try {
+    let live = [];
+    try { live = (await tor('/downloads')).downloads || []; } catch { return; }
+    for (const d of live) {
+      if (guarded.has(d.id)) continue;
+      const file = join(TORRENT_DIR, d.id + '.torrent');
+      if (!existsSync(file)) continue; // no file list yet
+      guarded.add(d.id);
+      let list;
+      try { list = torrentFiles(file); } catch (e) { console.log(`Guard: can't read ${d.id}: ${e.message}`); continue; }
+      const why = verdict(list.files);
+      if (!why) continue;
+      const title = meta[d.id]?.title || list.name || d.name;
+      console.log(`Guard: refused "${title}": ${why}`);
+      await tor('/control', { id: d.id, action: 'delete' }).catch(() => tor('/control', { id: d.id, action: 'remove' }).catch(() => {}));
+      // and the files themselves, in case anything arrived already
+      const base = resolve(DL_DIR), p = resolve(DL_DIR, basename(list.name || ''));
+      if (list.name && p.startsWith(base + sep)) await rm(p, { recursive: true, force: true }).catch(() => {});
+      blockedLog.unshift({ title, reason: why, at: Date.now() }); blockedLog.length = Math.min(blockedLog.length, 20);
+      delete meta[d.id]; saveMeta();
+    }
+    // finished downloads: drop whatever isn't video, subtitles or a harmless extra
+    for (const h of await history()) {
+      if (cleaned.has(h.id)) continue;
+      cleaned.add(h.id);
+      const base = resolve(h.dir), root = resolve(h.dir, basename(String(h.name).trim()));
+      if (!root.startsWith(base + sep) || !existsSync(root)) continue;
+      const st = await stat(root).catch(() => null);
+      const extra = st?.isDirectory() ? (await walk(root)).map((f) => f.p).filter((f) => !KEEP_EXT.has(extOf(f))) : [];
+      if (extra.length) {
+        await tor('/control', { id: h.id, action: 'stop-seed' }).catch(() => {}); // don't share (or fetch back) what's removed
+        for (const f of extra) await rm(f, { force: true }).catch(() => {});
+        console.log(`Guard: removed ${extra.length} extra file(s) from ${h.name}: ${extra.slice(0, 5).map((f) => basename(f)).join(', ')}`);
+      }
+    }
+  } finally { guardBusy = false; }
+}, 3000);
+
 /* ---------- API ---------- */
 function readJson(req) {
   return new Promise((ok) => {
@@ -952,7 +1037,7 @@ async function api(req, res, path) {
       seeding: seeding.get(x.id)?.status || 'stopped', ...(meta[x.id] ? { title: meta[x.id].title, poster: meta[x.id].poster } : {}),
       ...linkOf(meta[x.id]), vids: await countVids(x), watch: watchOf(x.id),
     });
-    return send(res, 200, { active, finished, engineError, dir: h[0]?.dir || DL_DIR });
+    return send(res, 200, { active, finished, engineError, dir: h[0]?.dir || DL_DIR, blocked: blockedLog.filter((b) => Date.now() - b.at < 24 * 3600e3) });
   }
   if (path === '/api/link' && req.method === 'POST') {
     // Ties a download to its TMDB title (used for downloads started elsewhere, e.g. in torlink itself).
