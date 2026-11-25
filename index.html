@@ -1710,6 +1710,9 @@ async function removeDownload(id, label, btn) {
 /* Watching a download that's still coming: an HLS stream from the PC, played with hls.js
    (or natively where the browser can, like Safari on iPhone). hls.js loads only when needed. */
 let liveHls = null, liveSubTimer = null;
+// An invisible 1x1 picture as the video's poster: without one, Android TV's web engine draws its own
+// big grey play button over the picture while a video loads.
+const BLANK_POSTER = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 function liveStop() { try { liveHls?.destroy(); } catch {} liveHls = null; liveMode = ''; clearInterval(liveSubTimer); }
 async function liveAttach(v, url, start, heal) {
   liveMode = '';
@@ -1821,7 +1824,7 @@ async function playMedia(id, title, startAt, atTime) {
   try { m = await local('/api/media/' + id); } catch (e) { body.innerHTML = `<p class="err" style="padding:16px">${esc(e.message)}</p>`; return; }
   if (!m.videos.length) { body.innerHTML = '<p class="muted" style="padding:16px;margin:0">No video files in this download.</p>'; return; }
   body.innerHTML = `
-    <div class="pstage"><video id="pv" controls playsinline preload="metadata" x-webkit-airplay="allow"></video>
+    <div class="pstage"><video id="pv" controls playsinline preload="metadata" x-webkit-airplay="allow" poster="${BLANK_POSTER}"></video>
       <div class="ptv" id="ptv" hidden><b>📺 Playing on your TV</b><span>The buttons here still work as a remote.</span></div>
       <div class="tz l" data-z="-10"></div><div class="tz r" data-z="10"></div>
       <button class="pskip" id="pskip" hidden></button>
