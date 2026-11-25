@@ -837,7 +837,59 @@ function torrentLayout(id) {
     files.push({ rel: f.parts.slice(Array.isArray(info.files) ? 1 : 0).join('/'), path, start: off, length: f.length });
     off += f.length;
   }
-  return { name, pieceLen: info['piece length'], hashes: info.pieces, files, total: off };
+  return { name, pieceLen: info['piece length'], hashes: info.pieces, files, total: off, folder: Array.isArray(info.files) ? resolve(base, name) : null };
+}
+// every piece of a (small) file checked: a subtitle file in the torrent is usable
+async function fileComplete(L, f) {
+  if (!f.length) return true;
+  for (let p = Math.floor(f.start / L.pieceLen); p <= Math.floor((f.start + f.length - 1) / L.pieceLen); p++) {
+    const ps = p * L.pieceLen, pe = Math.min(ps + L.pieceLen, L.total);
+    if (!pieceOk(L, p, await readGlobal(L, ps, pe - ps))) return false;
+  }
+  return true;
+}
+// A download that's still coming, in the shape mediaOf gives a finished one: its videos, and the
+// subtitle files that are usable (complete ones from the torrent, and ones added beside it).
+async function liveMediaOf(id) {
+  const L = torrentLayout(id);
+  if (!L) return null;
+  const vids = liveVids(L);
+  if (!vids.length) return null;
+  const subs = [], inTorrent = new Set(L.files.map((f) => f.path));
+  for (const f of L.files) if (SUB_EXT.has(extOf(f.rel)) && await fileComplete(L, f)) subs.push({ path: f.path, name: f.rel });
+  if (L.folder) { for (const f of await walk(L.folder)) if (SUB_EXT.has(extOf(f.p)) && !inTorrent.has(f.p)) subs.push({ path: f.p, name: f.p.slice(L.folder.length + 1) }); }
+  else {
+    const stem = basename(L.files[0].path, extname(L.files[0].path)).toLowerCase();
+    for (const f of await readdir(DL_DIR).catch(() => []))
+      if (f.toLowerCase().startsWith(stem + '.') && SUB_EXT.has(extOf(f))) subs.push({ path: join(DL_DIR, f), name: f });
+  }
+  const total = vids.reduce((n, f) => n + f.length, 0);
+  const biggest = vids.reduce((bi, f, i) => (f.length > vids[bi].length ? i : bi), 0);
+  return { L, vids: vids.map((f) => ({ path: f.path, name: f.rel, size: f.length })), subs, start: vids[biggest].length >= total * 0.6 ? biggest : 0 };
+}
+const headCache = new Map(); // path -> { at, info }: the start of a growing file, asked at most every 30 s
+async function headOf(path) {
+  const c = headCache.get(path);
+  if (c && Date.now() - c.at < 30e3) return c.info;
+  const info = existsSync(path) ? await probeHead(path) : null;
+  headCache.set(path, { at: Date.now(), info });
+  return info;
+}
+// Subtitles of a download that's still coming: files, plus the ones built into each video
+// (the stream copies those out as it goes).
+async function liveSubs(id, media) {
+  const out = [];
+  for (const sb of media.subs) {
+    const lang = langOfFile(sb.path);
+    const vi = media.vids.findIndex((v) => basename(sb.path).toLowerCase().startsWith(basename(v.path, extname(v.path)).toLowerCase() + '.'));
+    out.push({ path: sb.path, lang, label: LANG_NAMES[lang] ? `${LANG_NAMES[lang]} (file)` : basename(sb.path), video: vi >= 0 ? vi : null, builtin: false });
+  }
+  for (const [i, v] of media.vids.entries()) {
+    const text = ((await headOf(v.path))?.streams || []).filter((x) => x.codec_type === 'subtitle' && TEXT_SUBS.has(x.codec_name));
+    text.forEach((x, si) => out.push({ lang: x.tags?.language || '', label: `${x.tags?.title || LANG_NAMES[x.tags?.language] || x.tags?.language || 'Subtitle'} (built in)`,
+      video: i, si, builtin: true, ass: ['ass', 'ssa'].includes(x.codec_name) }));
+  }
+  return out;
 }
 // the videos of a torrent, in the order a finished download lists them (so progress keys match)
 const liveVids = (L) => L.files.filter((f) => VIDEO.has(extOf(f.rel)))
@@ -910,6 +962,11 @@ async function startLive(id, n, a, h) {
     '-c:a', 'aac', '-ac', '2', '-b:a', '192k', '-sn', '-dn', '-map_chapters', '-1',
     '-f', 'hls', '-hls_time', '4', '-hls_list_size', '0', '-hls_playlist_type', 'event', '-hls_segment_type', 'fmp4',
     '-hls_fmp4_init_filename', 'init.mp4', '-hls_segment_filename', join(dir, 's%05d.m4s'), join(dir, 'index.m3u8')];
+  // and the text subtitles built into it, as they come (ASS kept as ASS for its positions)
+  info.streams.filter((x) => x.codec_type === 'subtitle' && TEXT_SUBS.has(x.codec_name)).forEach((x, si) => {
+    const ass = ['ass', 'ssa'].includes(x.codec_name);
+    args.push('-map', `0:${x.index}`, '-c:s', ass ? 'copy' : 'webvtt', '-f', ass ? 'ass' : 'webvtt', '-flush_packets', '1', join(dir, `sub${si}.${ass ? 'ass' : 'vtt'}`));
+  });
   s = { id, dir, stopped: false, lastHit: Date.now(), error: null, fed: 0, length: f.length, dur: Number(info.format?.duration) || 0, errTail: '' };
   s.proc = spawn(FFMPEG, args, { windowsHide: true, cwd: dir }); // ffmpeg writes init.mp4 into its working folder
   s.proc.stdin.on('error', () => {});
@@ -940,25 +997,20 @@ setInterval(async () => {
 rm(LIVE_DIR, { recursive: true, force: true }).catch(() => {}); // leftovers from the last run
 
 // What /api/media answers for a download that's still coming.
-async function liveMedia(id, req) {
-  if ((await history()).some((x) => x.id === id)) return null;
-  const L = torrentLayout(id);
-  if (!L) return null;
-  const vids = liveVids(L);
-  if (!vids.length) return null;
-  const total = vids.reduce((n, f) => n + f.length, 0);
-  const biggest = vids.reduce((bi, f, i) => (f.length > vids[bi].length ? i : bi), 0);
+async function liveMedia(id, media) {
   const videos = [];
-  for (const [i, f] of vids.entries()) {
-    const head = existsSync(f.path) ? await probeHead(f.path) : null;
-    const tag = (x) => x.tags || {};
-    videos.push({ index: i, name: f.rel, size: f.length, ext: extOf(f.rel).slice(1), phone: { state: 'live' },
+  for (const [i, f] of media.vids.entries()) {
+    const head = await headOf(f.path), tag = (x) => x.tags || {};
+    videos.push({ index: i, name: f.name, size: f.size, ext: extOf(f.name).slice(1), phone: { state: 'live' },
       audio: (head?.streams || []).filter((x) => x.codec_type === 'audio').map((x) => ({ lang: tag(x).language || '', title: tag(x).title || '', ch: x.channels || 0 })),
       vcodec: head?.streams?.find((x) => x.codec_type === 'video')?.codec_name || '', dur: Number(head?.format?.duration) || 0,
       watch: progress[`${id}:${i}`] || null, chapters: [], external: '' });
   }
-  return { name: L.name, live: true, start: vids.length && vids[biggest].length >= total * 0.6 ? biggest : 0, videos,
-    tv: meta[id]?.item?.type === 'tv' || !!parseSE(L.name) || vids.length > 1, subs: [], subdl: !!settings.subdlKey, ffmpeg: !!FFMPEG, cast: null };
+  const subs = await liveSubs(id, media);
+  return { name: media.L.name, live: true, start: media.start, videos,
+    tv: meta[id]?.item?.type === 'tv' || !!parseSE(media.L.name) || media.vids.length > 1,
+    subs: subs.map((x, i) => ({ index: i, label: x.label, lang: x.lang, video: x.video, builtin: x.builtin })),
+    subdl: !!settings.subdlKey, ffmpeg: !!FFMPEG, cast: null };
 }
 
 /* ---------- API ---------- */
@@ -1276,9 +1328,22 @@ async function api(req, res, path) {
     return;
   }
   const mm = /^\/api\/media\/([a-f0-9]{40})(?:\/(video|sub|phone|thumbs)\/(\d+)(?:\.vtt|\/.*)?)?$/.exec(path);
-  if (mm && !mm[2]) {
-    const lm = await liveMedia(mm[1], req); // still downloading: played as a stream
-    if (lm) return send(res, 200, lm);
+  if (mm && (!mm[2] || mm[2] === 'sub') && !(await history()).some((x) => x.id === mm[1])) {
+    const media = await liveMediaOf(mm[1]); // still downloading: played as a stream
+    if (media) {
+      if (!mm[2]) return send(res, 200, await liveMedia(mm[1], media));
+      const sub = (await liveSubs(mm[1], media))[Number(mm[3])];
+      if (!sub) return send(res, 404, { error: 'no such subtitle' });
+      let vtt;
+      if (sub.builtin) {
+        const key = `${mm[1]}-${sub.video}`;
+        const ss = [...liveSessions].find(([k, x]) => (k === key || k.startsWith(key + '.')) && !x.stopped)?.[1];
+        const txt = ss ? await readFile(join(ss.dir, `sub${sub.si}.${sub.ass ? 'ass' : 'vtt'}`), 'utf8').catch(() => '') : '';
+        vtt = !txt ? 'WEBVTT\n\n' : sub.ass ? assToVtt(txt) : txt;
+      } else vtt = await subtitleAsVtt(sub.path);
+      res.writeHead(200, { 'Content-Type': 'text/vtt; charset=utf-8', 'Cache-Control': 'no-cache' }).end(vtt);
+      return;
+    }
   }
   if (mm) {
     const h = (await history()).find((x) => x.id === mm[1]);
@@ -1356,9 +1421,12 @@ async function api(req, res, path) {
     const u = new URL(req.url, 'http://x');
     const b = req.method === 'POST' ? await readJson(req) : { id: u.searchParams.get('id'), n: u.searchParams.get('n') };
     if (!settings.subdlKey) return send(res, 400, { error: 'Add a SubDL API key first' });
-    const h = (await history()).find((x) => x.id === b.id);
+    let h = (await history()).find((x) => x.id === b.id), media = h && await mediaOf(h);
+    if (!h && /^[a-f0-9]{40}$/.test(String(b.id))) { // still downloading
+      media = await liveMediaOf(b.id);
+      if (media) h = { id: b.id, name: media.L.name, dir: DL_DIR };
+    }
     if (path === '/api/subs/auto') return send(res, 200, h ? await queueAutoSubs(h) : { got: 0, note: 'not found' });
-    const media = h && await mediaOf(h);
     const n = Number(b.n) || 0, v = media?.vids[n];
     if (!v) return send(res, 404, { error: 'video not found' });
     if (path === '/api/subs/search') return send(res, 200, await subdlSearch(h, media, n, u.searchParams.get('langs')));

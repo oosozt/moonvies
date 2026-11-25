@@ -1709,8 +1709,8 @@ async function removeDownload(id, label, btn) {
 
 /* Watching a download that's still coming: an HLS stream from the PC, played with hls.js
    (or natively where the browser can, like Safari on iPhone). hls.js loads only when needed. */
-let liveHls = null;
-function liveStop() { try { liveHls?.destroy(); } catch {} liveHls = null; }
+let liveHls = null, liveSubTimer = null;
+function liveStop() { try { liveHls?.destroy(); } catch {} liveHls = null; clearInterval(liveSubTimer); }
 async function liveAttach(v, url, start) {
   if (!window.Hls) await new Promise((ok, fail) => {
     const sc = document.createElement('script'); sc.src = '/hls.min.js';
@@ -1942,6 +1942,12 @@ async function playMedia(id, title, startAt, atTime) {
       try { await liveAttach(v, ls.url, at ?? (inProgress(w0) ? w0.t : 0)); }
       catch (e) { $('#pnote').textContent = e.message; return; }
       $('#pnote').textContent = `${vid.name} · still downloading`;
+      // built-in subtitles grow with the stream: reload the chosen one now and then
+      clearInterval(liveSubTimer);
+      liveSubTimer = setInterval(() => {
+        if (!v.isConnected || my !== seq) return clearInterval(liveSubTimer);
+        if (m.subs.find((x) => String(x.index) === sel.value)?.builtin) setSub();
+      }, 20000);
     } else {
     const askA = () => local(`/api/media/${id}/phone/${i}?a=${a}${h ? '&h=1' : ''}`, {}).catch((e) => ({ state: 'error', error: e.message }));
     let st = a > 0 || h ? await askA() : vid.phone;
