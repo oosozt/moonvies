@@ -1,0 +1,22 @@
+# Your own keys, login token and history: never commit these
+settings.json
+lan-token.txt
+progress.json
+favorites.json
+downloads.json
+
+# Made at run time
+*.log
+phone/
+thumbs/
+node_modules/
+
+# Android builds and the signing key (keep the key safe yourself: updates need it)
+tv-app/build/
+tv-home/build/
+tv-app/signing.keystore
+tv-app/signing-password.txt
+*.apk
+*.idsig
+*.neon-backup
+tv-app/debloat-disabled.txt

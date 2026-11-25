@@ -1,0 +1,330 @@
+<title>TV Home Screen Options</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Bricolage+Grotesque:wght@400;600;700;800&family=Figtree:wght@400;500;600;700&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Hanken+Grotesk:wght@200;300;400;500&family=IBM+Plex+Mono:wght@400;500;700&family=Inter+Tight:wght@400;500;600;700;800&family=Newsreader:ital,wght@0,400;0,500;1,400&family=Orbitron:wght@500;700;900&family=Oswald:wght@400;500;600;700&family=Outfit:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,700;0,900;1,700&family=Share+Tech+Mono&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap">
+<style>
+/* Layout: one sticky bar (design tabs + compare), a short note per design, and a 1920x1080 TV mock-up scaled to the width. */
+:root { --bg:#f3f2ee; --panel:#ffffff; --line:#d9d6ce; --fg:#1c1b19; --muted:#66635c; --accent:#1c1b19; --on-accent:#ffffff; --hover:#e7e5df; --lift:#0000001f;
+  --sans:'Geist',system-ui,-apple-system,'Segoe UI',sans-serif; --mono:'Geist Mono',ui-monospace,Consolas,monospace; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#121214; --panel:#1c1d21; --line:#2e3036; --fg:#f2f1ee; --muted:#a09fa6; --accent:#f2f1ee; --on-accent:#121214; --hover:#24262b; --lift:#00000066; color-scheme:dark } }
+:root[data-theme="dark"] { --bg:#121214; --panel:#1c1d21; --line:#2e3036; --fg:#f2f1ee; --muted:#a09fa6; --accent:#f2f1ee; --on-accent:#121214; --hover:#24262b; --lift:#00000066; color-scheme:dark }
+* { box-sizing:border-box; }
+body { background:var(--bg); color:var(--fg); font:14px/1.45 var(--sans); -webkit-font-smoothing:antialiased; }
+body::before { content:""; position:fixed; inset:0 0 auto; height:env(safe-area-inset-top,0px); z-index:10; background:var(--bg); }
+.gut { padding-left:max(16px,env(safe-area-inset-left,0px)); padding-right:max(16px,env(safe-area-inset-right,0px)); }
+.bar { position:sticky; top:env(safe-area-inset-top,0px); z-index:9; background:var(--bg); border-bottom:1px solid var(--line); padding-block:10px; display:flex; flex-direction:column; gap:8px; }
+.row { display:flex; align-items:center; gap:10px 14px; flex-wrap:wrap; }
+.bar h1 { margin:0; font-size:15px; font-weight:600; letter-spacing:-.01em; }
+.bar .hint { color:var(--muted); font-size:12.5px; }
+.tabs { display:flex; gap:4px; overflow-x:auto; scrollbar-width:thin; padding-bottom:2px; min-width:0; }
+.tabs button { flex:none; font:500 12.5px var(--sans); cursor:pointer; border:0; background:none; color:var(--muted); border-radius:7px; height:30px; padding:0 10px; display:inline-flex; align-items:center; gap:6px; transition:color .16s, background .16s; }
+.tabs button b { font:500 11px var(--mono); opacity:.7; }
+.tabs button:hover { color:var(--fg); background:var(--hover); }
+.tabs button[aria-pressed=true] { color:var(--on-accent); background:var(--accent); }
+.tabs .sep { width:1px; background:var(--line); margin:4px 4px; flex:none; }
+button:focus-visible { outline:2px solid var(--fg); outline-offset:2px; }
+.note { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px 24px; align-items:end; padding-block:18px 14px; max-width:1500px; margin:0 auto; }
+.note h2 { margin:0 0 4px; font-size:21px; font-weight:600; letter-spacing:-.02em; text-wrap:balance; }
+.note p { margin:0; color:var(--muted); max-width:72ch; text-wrap:pretty; }
+.facts { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+.facts span { font-size:12px; color:var(--muted); border:1px solid var(--line); border-radius:6px; padding:3px 8px; }
+.facts span b { color:var(--fg); font-weight:500; }
+.stage { max-width:1500px; margin:0 auto; padding-bottom:40px; }
+.frame { position:relative; overflow:hidden; border-radius:10px; border:1px solid var(--line); background:#000; width:100%; aspect-ratio:16/9; }
+.frame > .screen { position:absolute; left:0; top:0; transform-origin:0 0; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr)); gap:22px 18px; max-width:1500px; margin:0 auto; padding-block:18px 48px; }
+.card { font:inherit; color:inherit; text-align:left; background:none; border:0; padding:0; cursor:pointer; display:block; min-width:0; }
+.card .frame { transition:border-color .16s; }
+.card:hover .frame { border-color:var(--muted); }
+.card h3 { margin:10px 2px 2px; font-size:14px; font-weight:600; }
+.card h3 b { font:500 11.5px var(--mono); color:var(--muted); margin-right:6px; }
+.card p { margin:0 2px; font-size:12.5px; color:var(--muted); }
+@media (max-width:760px) { .note { grid-template-columns:1fr; } .facts { justify-content:flex-start; } }
+@media (prefers-reduced-motion:reduce) { * { transition:none !important; animation:none !important; } }
+
+/* ---------- shared mock pieces ---------- */
+.screen { width:1920px; height:1080px; overflow:hidden; position:relative; font-size:24px; line-height:1.3; }
+.screen * { box-sizing:border-box; }
+.screen h1,.screen h2,.screen h3,.screen p,.screen ul { margin:0; padding:0; }
+.screen ul { list-style:none; }
+.ph { background-size:cover; background-position:center; }
+
+/* ============ 01 Classic ============ */
+.c1 { background:#101214; color:#e8eaed; font-family:'Figtree',sans-serif; padding:56px 96px; }
+.c1 .top { display:flex; align-items:center; gap:28px; }
+.c1 .search { height:64px; border-radius:32px; background:#24272b; display:flex; align-items:center; gap:16px; padding:0 30px; color:#9aa0a6; font-size:24px; width:620px; }
+.c1 .search i { width:22px; height:22px; border:3px solid #9aa0a6; border-radius:50%; }
+.c1 .top .r { margin-left:auto; display:flex; align-items:center; gap:30px; color:#9aa0a6; }
+.c1 .top time { font-size:40px; color:#e8eaed; font-weight:500; }
+.c1 .gear { width:52px; height:52px; border-radius:50%; background:#24272b; }
+.c1 h3 { font-size:26px; font-weight:600; color:#c4c7c5; margin:52px 0 20px; }
+.c1 .apps { display:flex; gap:28px; }
+.c1 .app { width:262px; height:148px; border-radius:16px; display:grid; place-items:center; font-size:30px; font-weight:700; color:#fff; background:var(--a); flex:none; }
+.c1 .app.f { transform:scale(1.1); box-shadow:0 0 0 5px #fff, 0 20px 40px #000a; z-index:2; }
+.c1 .cont { display:flex; gap:28px; }
+.c1 .ct { width:440px; border-radius:16px; overflow:hidden; background:#1c1f22; flex:none; }
+.c1 .ct .ph { height:248px; position:relative; }
+.c1 .ct .ph s { position:absolute; left:0; bottom:0; height:6px; background:#8ab4f8; }
+.c1 .ct p { padding:16px 20px 20px; font-size:24px; }
+.c1 .ct small { display:block; color:#9aa0a6; font-size:20px; }
+
+/* ============ 02 Minimal ============ */
+.c2 { background:#fbfbfa; color:#9a9a96; font-family:'Hanken Grotesk',sans-serif; display:grid; grid-template-columns:760px 1fr; gap:120px; padding:110px 130px; }
+.c2 time { display:block; font-size:250px; font-weight:200; letter-spacing:-.06em; line-height:.9; color:#151515; margin-left:-10px; }
+.c2 .date { font-size:30px; margin:20px 0 0; }
+.c2 .wx { font-size:26px; margin-top:6px; }
+.c2 .now { margin-top:120px; }
+.c2 .now small { font-size:22px; letter-spacing:.08em; text-transform:uppercase; }
+.c2 .now b { display:block; font-size:44px; font-weight:400; color:#151515; margin:10px 0 18px; letter-spacing:-.02em; }
+.c2 .line { height:2px; background:#e6e6e3; width:520px; } .c2 .line i { display:block; height:100%; width:58%; background:#151515; }
+.c2 ul { align-self:center; }
+.c2 li { display:flex; justify-content:space-between; align-items:baseline; font-size:46px; font-weight:300; letter-spacing:-.02em; padding:16px 0; border-bottom:1px solid #ececea; }
+.c2 li em { font-style:normal; font-size:22px; letter-spacing:0; }
+.c2 li.f { color:#151515; font-weight:400; }
+.c2 li.f::before { content:''; width:14px; height:14px; border-radius:50%; background:#151515; margin-right:22px; align-self:center; }
+.c2 li.f span { margin-right:auto; }
+
+/* ============ 03 Swiss ============ */
+.c3 { background:#fff; color:#111; font-family:'Inter Tight',sans-serif; padding:64px 80px; display:grid; grid-template-columns:repeat(12,1fr); column-gap:32px; grid-template-rows:auto auto 1fr; }
+.c3 .hd { grid-column:1/-1; display:flex; font-size:22px; border-bottom:2px solid #111; padding-bottom:14px; }
+.c3 .hd b { font-weight:800; } .c3 .hd span { margin-left:auto; }
+.c3 h1 { grid-column:1/9; font-size:200px; font-weight:800; letter-spacing:-.06em; line-height:.86; margin:50px 0 50px -8px; }
+.c3 .sq { grid-column:9/13; background:#e30613; color:#fff; margin:50px 0; padding:26px 30px; display:flex; flex-direction:column; justify-content:space-between; }
+.c3 .sq time { font-size:120px; font-weight:700; letter-spacing:-.05em; line-height:1; }
+.c3 .sq p { font-size:26px; font-weight:600; }
+.c3 .tiles { grid-column:1/-1; display:grid; grid-template-columns:repeat(5,1fr); gap:0 32px; align-self:start; }
+.c3 .tile { border-top:6px solid #111; padding:16px 0 28px; }
+.c3 .tile code { font:600 20px 'Inter Tight',sans-serif; color:#8d8d8d; }
+.c3 .tile b { display:block; font-size:46px; font-weight:700; letter-spacing:-.04em; margin-top:4px; }
+.c3 .tile.f { border-color:#e30613; } .c3 .tile.f b { color:#e30613; }
+.c3 .tile.f b::after { content:' →'; }
+
+/* ============ 04 Editorial ============ */
+.c4 { background:#f5efe2; color:#2a2622; font-family:'Newsreader',serif; padding:44px 110px; }
+.c4 .mast { text-align:center; border-bottom:4px double #2a2622; padding-bottom:16px; }
+.c4 .mast small { display:flex; justify-content:space-between; font:500 20px 'Hanken Grotesk',sans-serif; letter-spacing:.12em; text-transform:uppercase; }
+.c4 .mast b { display:block; font:900 92px/1.05 'Playfair Display',serif; letter-spacing:-.01em; margin-top:6px; }
+.c4 .cols { display:grid; grid-template-columns:1fr 560px; gap:70px; margin-top:34px; }
+.c4 .kick { font:500 20px 'Hanken Grotesk',sans-serif; letter-spacing:.14em; text-transform:uppercase; color:#a8281c; }
+.c4 h2 { font:700 84px/1 'Playfair Display',serif; letter-spacing:-.02em; margin:12px 0 18px; }
+.c4 h2 i { font-weight:700; }
+.c4 .deck { font-size:30px; font-style:italic; color:#4a443c; line-height:1.35; max-width:900px; }
+.c4 .lead { height:380px; margin-top:30px; border:2px solid #2a2622; outline:2px solid #2a2622; outline-offset:6px; }
+.c4 .toc h3 { font:900 40px 'Playfair Display',serif; border-bottom:2px solid #2a2622; padding-bottom:8px; }
+.c4 .toc li { display:flex; align-items:baseline; gap:12px; padding:13px 0; font-size:34px; }
+.c4 .toc li::after { content:''; order:1; flex:1; border-bottom:2px dotted #7a6f5f; }
+.c4 .toc li em { order:2; font-size:22px; font-family:'Hanken Grotesk',sans-serif; color:#7a6f5f; font-style:normal; }
+.c4 .toc li.f { color:#a8281c; font-style:italic; }
+.c4 .toc li.f em { color:#a8281c; }
+
+/* ============ 05 Soft bento ============ */
+.c5 { background:#fbf3ea; color:#4b4038; font-family:'Bricolage Grotesque',sans-serif; padding:48px 64px; display:grid; grid-template-columns:repeat(12,1fr); grid-template-rows:330px 1fr; gap:28px; }
+.c5 .t { border-radius:44px; padding:34px 38px; background:#fff; overflow:hidden; position:relative; }
+.c5 .clock { grid-column:1/5; background:#231a12; color:#fbf3ea; display:flex; flex-direction:column; justify-content:space-between; }
+.c5 .clock time { font-size:150px; font-weight:800; letter-spacing:-.05em; line-height:.9; }
+.c5 .clock p { font-size:30px; opacity:.8; }
+.c5 .cont { grid-column:5/13; display:grid; grid-template-columns:440px 1fr; gap:36px; align-items:center; background:#dff3e6; color:#12412c; }
+.c5 .cont .ph { height:250px; border-radius:28px; }
+.c5 .cont small { font-size:24px; font-weight:600; }
+.c5 .cont b { display:block; font-size:54px; font-weight:800; letter-spacing:-.03em; line-height:1.05; margin:8px 0 18px; }
+.c5 .cont .bar { height:18px; border-radius:99px; background:#bfe6cc; } .c5 .cont .bar i { display:block; height:100%; width:58%; border-radius:99px; background:#12412c; }
+.c5 .apps { grid-column:1/-1; display:grid; grid-template-columns:repeat(5,1fr); gap:28px; }
+.c5 .app { border-radius:36px; background:var(--a); padding:28px 30px; display:flex; flex-direction:column; justify-content:flex-end; font-size:38px; font-weight:700; color:#231a12; letter-spacing:-.02em; }
+.c5 .app.f { outline:8px solid #231a12; outline-offset:6px; }
+
+/* ============ 06 Glass night ============ */
+.c6 { background:radial-gradient(circle at 18% 22%,#3b4cff 0,transparent 38%),radial-gradient(circle at 82% 70%,#c13dff 0,transparent 40%),radial-gradient(circle at 60% 10%,#00b3a4 0,transparent 30%),#0b0d1e; color:#eef0ff; font-family:'Outfit',sans-serif; padding:60px 96px; }
+.c6 .top { display:flex; align-items:center; justify-content:space-between; font-size:26px; color:#c9cdf5; }
+.c6 .top time { font-size:60px; font-weight:300; color:#fff; letter-spacing:-.02em; }
+.c6 .hero { margin-top:56px; height:430px; border-radius:36px; position:relative; overflow:hidden; border:1px solid #ffffff38; }
+.c6 .hero::after { content:''; position:absolute; inset:0; background:linear-gradient(90deg,#0b0d1ee6 30%,transparent); }
+.c6 .hero div { position:absolute; left:56px; bottom:52px; z-index:2; }
+.c6 .hero small { font-size:24px; color:#c9cdf5; }
+.c6 .hero b { display:block; font-size:76px; font-weight:600; letter-spacing:-.03em; margin:6px 0 24px; }
+.c6 .hero span { display:inline-block; padding:16px 34px; border-radius:99px; background:#fff; color:#0b0d1e; font-weight:600; font-size:26px; }
+.c6 .dock { margin-top:44px; display:flex; gap:24px; padding:22px; border-radius:40px; background:#ffffff1c; border:1px solid #ffffff30; backdrop-filter:blur(30px); }
+.c6 .app { flex:1; height:150px; border-radius:26px; background:#ffffff14; display:grid; place-items:center; font-size:27px; font-weight:500; color:#e5e8ff; }
+.c6 .app.f { background:#ffffff; color:#0b0d1e; transform:scale(1.08); box-shadow:0 20px 50px #000a; }
+
+/* ============ 07 Brutalism ============ */
+.c7 { background:#ececec; color:#000; font-family:'IBM Plex Mono',monospace; padding:40px 56px; }
+.c7 .hd { display:flex; justify-content:space-between; font-size:24px; border:2px solid #000; background:#fff; padding:10px 16px; }
+.c7 h1 { font:700 330px/.8 'IBM Plex Mono',monospace; letter-spacing:-.08em; margin:34px 0 26px -16px; }
+.c7 .cols { display:grid; grid-template-columns:1fr 640px; gap:40px; }
+.c7 table { width:100%; border-collapse:collapse; background:#fff; font-size:30px; }
+.c7 td { border:2px solid #000; padding:14px 18px; }
+.c7 td:first-child { width:90px; text-align:center; }
+.c7 td u { color:#0000ee; }
+.c7 tr.f td { background:#000; color:#fff; } .c7 tr.f u { color:#fff; }
+.c7 .side { border:2px solid #000; background:#fff; padding:20px; font-size:26px; }
+.c7 .side b { display:block; font-size:34px; margin:10px 0; }
+.c7 .side .ph { height:300px; border:2px solid #000; filter:grayscale(1) contrast(1.3); }
+.c7 .side p { margin-top:14px; }
+
+/* ============ 08 Neo-brutalism ============ */
+.c8 { background:#fff4d6; color:#111; font-family:'Space Grotesk',sans-serif; font-weight:500; padding:48px 70px; --b:5px solid #111; --sh:10px 10px 0 #111; }
+.c8 .top { display:flex; align-items:center; gap:24px; }
+.c8 .top b { font:400 48px 'Archivo Black',sans-serif; background:#ffd400; border:var(--b); box-shadow:var(--sh); padding:10px 26px; }
+.c8 .top span { border:var(--b); background:#fff; padding:12px 24px; font-weight:700; font-size:26px; box-shadow:6px 6px 0 #111; }
+.c8 .top time { margin-left:auto; font:400 64px 'Archivo Black',sans-serif; background:#111; color:#fff4d6; padding:4px 22px; }
+.c8 .hero { margin-top:48px; display:grid; grid-template-columns:600px 1fr; border:var(--b); box-shadow:var(--sh); background:#fff; }
+.c8 .hero .ph { height:330px; border-right:var(--b); }
+.c8 .hero div { padding:34px 40px; display:flex; flex-direction:column; gap:12px; }
+.c8 .hero small { align-self:flex-start; background:#ff7ac6; border:3px solid #111; padding:2px 12px; font-weight:700; text-transform:uppercase; font-size:22px; }
+.c8 .hero h2 { font:400 70px/1 'Archivo Black',sans-serif; letter-spacing:-.02em; }
+.c8 .hero .bar { height:26px; border:4px solid #111; background:#fff; margin-top:auto; } .c8 .hero .bar i { display:block; height:100%; width:58%; background:#b6ff3c; border-right:4px solid #111; }
+.c8 h3 { font:400 34px 'Archivo Black',sans-serif; margin:44px 0 22px; text-transform:uppercase; }
+.c8 .apps { display:grid; grid-template-columns:repeat(6,1fr); gap:28px; }
+.c8 .app { height:170px; border:var(--b); box-shadow:var(--sh); background:var(--a); display:flex; align-items:flex-end; padding:16px 18px; font:700 30px 'Space Grotesk',sans-serif; }
+.c8 .app.f { transform:translate(-8px,-8px); box-shadow:18px 18px 0 #111; background:#ff7ac6; }
+
+/* ============ 09 Constructivism ============ */
+.c9 { background:#ede3cd; color:#151310; font-family:'Oswald',sans-serif; }
+.c9 .circle { position:absolute; width:860px; height:860px; border-radius:50%; background:#d4281c; right:-200px; top:-260px; }
+.c9 .band { position:absolute; left:-120px; top:200px; width:1500px; height:210px; background:#151310; transform:rotate(-9deg); transform-origin:left center; }
+.c9 h1 { position:absolute; left:80px; top:170px; transform:rotate(-9deg); transform-origin:left center; font-size:210px; font-weight:700; color:#ede3cd; line-height:1; text-transform:uppercase; letter-spacing:.02em; }
+.c9 .kick { position:absolute; left:84px; top:44px; font-size:26px; letter-spacing:.24em; text-transform:uppercase; }
+.c9 time { position:absolute; left:80px; top:520px; font-size:300px; font-weight:700; line-height:.85; letter-spacing:-.03em; }
+.c9 time span { color:#d4281c; }
+.c9 .wedge { position:absolute; left:0; bottom:0; width:700px; height:300px; background:#d4281c; clip-path:polygon(0 100%,0 28%,100% 100%); }
+.c9 .panel { position:absolute; left:900px; top:470px; width:860px; background:#151310; color:#ede3cd; padding:26px 34px 14px; }
+.c9 .panel h2 { font-size:32px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; border-bottom:6px solid #d4281c; padding-bottom:10px; }
+.c9 .panel li { display:flex; justify-content:space-between; padding:11px 0; border-bottom:1px solid #3a352d; font-size:34px; text-transform:uppercase; letter-spacing:.05em; }
+.c9 .panel li em { font-style:normal; color:#8a7f6a; }
+.c9 .panel li.f { color:#ff5040; } .c9 .panel li.f em { color:#ff5040; }
+.c9 .nowp { position:absolute; left:900px; top:270px; font-size:30px; text-transform:uppercase; letter-spacing:.1em; color:#ede3cd; mix-blend-mode:difference; }
+.c9 .nowp b { display:block; font-size:62px; letter-spacing:.02em; }
+
+/* ============ 10 Neon synthwave ============ */
+.c10 { background:linear-gradient(#0a0520 0%,#1a0838 50%,#3b0f4a 70%,#0a0520 70%); color:#dff8ff; font-family:'Share Tech Mono',monospace; padding:54px 96px; }
+.c10 .sun { position:absolute; left:50%; top:470px; width:640px; height:640px; transform:translate(-50%,-50%); border-radius:50%; background:linear-gradient(#ffe14d,#ff8a3d 45%,#ff2e88); opacity:.6;
+  -webkit-mask-image:linear-gradient(#000 52%,transparent 52% 56%,#000 56% 64%,transparent 64% 69%,#000 69% 76%,transparent 76% 82%,#000 82% 88%,transparent 88% 95%,#000 95%); mask-image:linear-gradient(#000 52%,transparent 52% 56%,#000 56% 64%,transparent 64% 69%,#000 69% 76%,transparent 76% 82%,#000 82% 88%,transparent 88% 95%,#000 95%); }
+.c10 .floor { position:absolute; left:-50%; right:-50%; top:756px; height:600px; opacity:.55; background:repeating-linear-gradient(90deg,#ff2e88 0 3px,transparent 3px 140px),repeating-linear-gradient(0deg,#ff2e88 0 3px,transparent 3px 70px); transform:perspective(500px) rotateX(64deg); transform-origin:top; }
+.c10 .top, .c10 .hero, .c10 .apps { position:relative; z-index:2; }
+.c10 .top { display:flex; align-items:center; justify-content:space-between; }
+.c10 .top b { font:900 44px 'Orbitron',sans-serif; letter-spacing:.14em; color:#ff8ad1; text-shadow:0 3px 0 #ff2e88,0 0 24px #3df2ff88; }
+.c10 .top time { font:700 56px 'Orbitron',sans-serif; color:#3df2ff; text-shadow:0 0 18px #3df2ff; }
+.c10 .hero { margin-top:60px; width:840px; padding:30px 36px; background:#0a0520d9; border:2px solid #3df2ff; clip-path:polygon(18px 0,100% 0,100% calc(100% - 18px),calc(100% - 18px) 100%,0 100%,0 18px); }
+.c10 .hero small { color:#ffe14d; font:700 22px 'Orbitron',sans-serif; letter-spacing:.24em; }
+.c10 .hero h2 { font:900 58px 'Orbitron',sans-serif; color:#fff; text-shadow:0 3px 0 #ff2e88; margin:10px 0 18px; }
+.c10 .hero .bar { height:14px; border:2px solid #3df2ff88; } .c10 .hero .bar i { display:block; height:100%; width:58%; background:repeating-linear-gradient(90deg,#3df2ff 0 10px,transparent 10px 14px); box-shadow:0 0 12px #3df2ff; }
+.c10 .apps { position:absolute; left:96px; right:96px; bottom:70px; display:grid; grid-template-columns:repeat(6,1fr); gap:24px; }
+.c10 .app { height:150px; display:grid; place-items:center; font:700 26px 'Orbitron',sans-serif; letter-spacing:.06em; text-transform:uppercase; color:#3df2ff; background:#0a0520cc; border:2px solid #3df2ff88; text-align:center; padding:0 10px;
+  clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px); }
+.c10 .app.f { background:#ff2e88; color:#fff; border-color:#ff2e88; box-shadow:0 0 40px #ff2e88; }
+</style>
+
+<div class="bar gut">
+  <div class="row"><h1>Home screen for the Mi TV Stick</h1><span class="hint">10 directions, classic to neon. Pick one and I build it.</span></div>
+  <div class="tabs" id="tabs" role="toolbar" aria-label="Designs"></div>
+</div>
+<div class="gut">
+  <section class="note" id="note"></section>
+  <div class="stage" id="stage"></div>
+  <div class="grid" id="grid" hidden></div>
+</div>
+
+<script>
+// The same content in every design: the apps on the stick, what's being watched, the time.
+const APPS = ['Movie Catalog', 'YouTube', 'Netflix', 'Prime Video', 'Spotify', 'tabii', 'TV+', 'HBO Max', 'Play Store', 'Tailscale'];
+const NOW = { show: 'Overgeared', ep: 'S01E03', left: '10 min left', pct: 58 };
+const ART = "linear-gradient(135deg,#2b2140,#6b2f5b 45%,#e0794a)"; // stands in for the episode's picture
+const focus = 0; // the remote's focus sits on the first app in every mock-up
+
+const D = [
+  { id: 'classic', name: 'Classic', tag: 'Familiar', load: 'Light', type: 'Figtree',
+    about: 'Close to the stock Android TV home, cleaned up: dark background, rounded app banners, one Continue watching row. Nothing to relearn.',
+    html: () => `<div class="screen c1"><div class="top"><div class="search"><i></i>Search movies, shows and apps</div><div class="r"><span>Wi-Fi</span><div class="gear"></div><time>16:30</time></div></div>
+      <h3>Favourite apps</h3><div class="apps">${APPS.slice(0, 6).map((a, i) => `<div class="app ${i === focus ? 'f' : ''}" style="--a:${['#7b2ff7', '#c4302b', '#8c1d18', '#0f79af', '#1d7a46', '#d0402e'][i]}">${a}</div>`).join('')}</div>
+      <h3>Continue watching</h3><div class="cont">${[['Overgeared · S01E03', '10 min left', 58], ['Silo · S01E07', '32 min left', 20], ['Dallas Buyers Club', '1 h 4 min left', 45]].map(([t, s, p]) => `<div class="ct"><div class="ph" style="background-image:${ART}"><s style="width:${p}%"></s></div><p>${t}<small>${s}</small></p></div>`).join('')}</div></div>` },
+  { id: 'minimal', name: 'Minimal', tag: 'Quiet', load: 'Light', type: 'Hanken Grotesk 200',
+    about: 'A huge thin clock, what you were watching, and your apps as a plain list. Almost nothing on screen, so it feels instant.',
+    html: () => `<div class="screen c2"><div><time>16:30</time><p class="date">Wednesday 25 November</p><p class="wx">Wi-Fi connected</p>
+      <div class="now"><small>Continue</small><b>${NOW.show} · ${NOW.ep}</b><div class="line"><i></i></div></div></div>
+      <ul>${APPS.slice(0, 7).map((a, i) => `<li class="${i === focus ? 'f' : ''}"><span>${a}</span><em>${i === 0 ? 'OK to open' : ''}</em></li>`).join('')}</ul></div>` },
+  { id: 'swiss', name: 'Swiss', tag: 'Grid', load: 'Light', type: 'Inter Tight 800',
+    about: 'International Typographic Style: a strict 12-column grid, heavy rules, one red square for the time. Apps are big words, not icons.',
+    html: () => `<div class="screen c3"><div class="hd"><b>Home</b>&nbsp;&nbsp;Apps · Settings<span>Wed 25.11.2026</span></div>
+      <h1>Continue<br>${NOW.show}.</h1><div class="sq"><time>16:30</time><p>${NOW.ep} · ${NOW.left}</p></div>
+      <div class="tiles">${APPS.slice(0, 10).map((a, i) => `<div class="tile ${i === focus ? 'f' : ''}"><code>App</code><b>${a}</b></div>`).join('')}</div></div>` },
+  { id: 'editorial', name: 'Editorial', tag: 'Print', load: 'Light', type: 'Playfair Display + Newsreader',
+    about: 'Your TV as the evening paper: a masthead with the date, tonight\'s episode as the lead story, the apps as a table of contents.',
+    html: () => `<div class="screen c4"><div class="mast"><small><span>Wednesday 25 November 2026</span><span>16:30 · Evening edition</span></small><b>The Living Room</b></div>
+      <div class="cols"><div><p class="kick">Tonight</p><h2>${NOW.show}, <i>episode three</i></h2><p class="deck">Picked up where you left off. ${NOW.left}, then the next episode is already downloaded.</p><div class="lead ph" style="background-image:${ART}"></div></div>
+      <div class="toc"><h3>Contents</h3><ul>${APPS.slice(0, 9).map((a, i) => `<li class="${i === focus ? 'f' : ''}">${a}<em>${['films', 'video', 'films', 'films', 'music', 'tv', 'tv', 'films', 'apps'][i]}</em></li>`).join('')}</ul></div></div></div>` },
+  { id: 'bento', name: 'Soft bento', tag: 'Friendly', load: 'Light', type: 'Bricolage Grotesque',
+    about: 'Rounded tiles in warm pastels, a big clock tile and a wide Continue tile. Soft and friendly, still easy to aim at with the remote.',
+    html: () => `<div class="screen c5"><div class="t clock"><p>Wed 25 Nov</p><time>16:30</time></div>
+      <div class="t cont"><div class="ph" style="background-image:${ART}"></div><div><small>Continue watching</small><b>${NOW.show}<br>${NOW.ep}</b><div class="bar"><i></i></div></div></div>
+      <div class="apps">${APPS.slice(0, 5).map((a, i) => `<div class="app ${i === focus ? 'f' : ''}" style="--a:${['#fde2da', '#fdefc8', '#dfe6fb', '#e5f3d9', '#f1e1fb'][i]}">${a}</div>`).join('')}</div></div>` },
+  { id: 'glass', name: 'Glass night', tag: 'Modern', load: 'Heavy', type: 'Outfit',
+    about: 'Deep colour fields behind frosted panels, a big Continue banner and a dock of apps. The blur is the costly part on a 1 GB stick.',
+    html: () => `<div class="screen c6"><div class="top"><span>Good evening</span><time>16:30</time></div>
+      <div class="hero ph" style="background-image:${ART}"><div><small>Continue watching</small><b>${NOW.show} · ${NOW.ep}</b><span>▶ Resume · ${NOW.left}</span></div></div>
+      <div class="dock">${APPS.slice(0, 7).map((a, i) => `<div class="app ${i === focus ? 'f' : ''}">${a}</div>`).join('')}</div></div>` },
+  { id: 'brutal', name: 'Brutalism', tag: 'Raw', load: 'Light', type: 'IBM Plex Mono',
+    about: 'Raw web brutalism: grey page, monospace, black table borders, blue underlined links. The focused row simply inverts.',
+    html: () => `<div class="screen c7"><div class="hd"><span>HOME / APPS</span><span>2026-11-25 16:30</span></div><h1>HOME</h1>
+      <div class="cols"><table>${APPS.slice(0, 7).map((a, i) => `<tr class="${i === focus ? 'f' : ''}"><td>${String(i + 1).padStart(2, '0')}</td><td><u>${a}</u></td><td>${i === focus ? '[OK] OPEN' : 'open'}</td></tr>`).join('')}</table>
+      <div class="side">CONTINUE:<b>${NOW.show} ${NOW.ep}</b><div class="ph" style="background-image:${ART}"></div><p>${NOW.pct}% watched. ${NOW.left}.</p></div></div></div>` },
+  { id: 'neo', name: 'Neo-brutalism', tag: 'Loud', load: 'Light', type: 'Archivo Black + Space Grotesk',
+    about: 'From your reference: cream paper, thick black borders, hard offset shadows and flat loud colours. The focused app lifts off the page.',
+    html: () => `<div class="screen c8"><div class="top"><b>HOME</b><span>Apps</span><span>Settings</span><time>16:30</time></div>
+      <div class="hero"><div class="ph" style="background-image:${ART}"></div><div><small>Continue watching</small><h2>${NOW.show}<br>${NOW.ep}</h2><span>${NOW.left}</span><div class="bar"><i></i></div></div></div>
+      <h3>Your apps</h3><div class="apps">${APPS.slice(0, 6).map((a, i) => `<div class="app ${i === focus ? 'f' : ''}" style="--a:${['#ffd400', '#8fd3ff', '#ff8f8a', '#a8f5a0', '#b6ff3c', '#e7e2d3'][i]}">${a}</div>`).join('')}</div></div>` },
+  { id: 'constructivist', name: 'Constructivism', tag: 'Poster', load: 'Light', type: 'Oswald',
+    about: 'A 1920s poster: red circle, black diagonal band, the time in huge numerals, apps on a black panel. Dramatic, only a few apps visible.',
+    html: () => `<div class="screen c9"><div class="circle"></div><div class="band"></div><div class="wedge"></div><p class="kick">Wednesday · 25 November</p><h1>Home</h1>
+      <time>16<span>:</span>30</time><p class="nowp">Continue<b>${NOW.show} ${NOW.ep}</b></p>
+      <div class="panel"><h2>Apps</h2><ul>${APPS.slice(0, 6).map((a, i) => `<li class="${i === focus ? 'f' : ''}">${a}<em>${i === focus ? '▶ OK' : ''}</em></li>`).join('')}</ul></div></div>` },
+  { id: 'neon', name: 'Neon', tag: 'Synthwave', load: 'Medium', type: 'Orbitron + Share Tech Mono',
+    about: 'The Movie Catalog\'s own look on the whole TV: midnight sky, striped sun, pink grid floor, cut-corner panels. Kept still on the stick.',
+    html: () => `<div class="screen c10"><div class="sun"></div><div class="floor"></div><div class="top"><b>HOME</b><time>16:30</time></div>
+      <div class="hero"><small>CONTINUE</small><h2>${NOW.show} ${NOW.ep}</h2><div class="bar"><i></i></div></div>
+      <div class="apps">${APPS.slice(0, 6).map((a, i) => `<div class="app ${i === focus ? 'f' : ''}">${a}</div>`).join('')}</div></div>` },
+];
+
+let cur = 'neo';
+try { const s = localStorage.getItem('tvhome.cur'); if (s && (s === 'all' || D.some((d) => d.id === s))) cur = s; } catch {}
+
+const tabs = document.getElementById('tabs');
+tabs.innerHTML = D.map((d, i) => `<button data-id="${d.id}"><b>${String(i + 1).padStart(2, '0')}</b>${d.name}</button>`).join('') +
+  '<span class="sep"></span><button data-id="all">Compare all</button>';
+tabs.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) show(b.dataset.id); });
+
+function fit() {
+  for (const f of document.querySelectorAll('.frame')) {
+    const s = f.firstElementChild; if (s) s.style.transform = `scale(${f.clientWidth / 1920})`;
+  }
+}
+new ResizeObserver(fit).observe(document.body);
+
+function show(id) {
+  cur = id;
+  try { localStorage.setItem('tvhome.cur', id); } catch {}
+  for (const b of tabs.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.id === id));
+  const note = document.getElementById('note'), stage = document.getElementById('stage'), grid = document.getElementById('grid');
+  if (id === 'all') {
+    note.innerHTML = '<div><h2>All ten side by side</h2><p>Each shows the same moment: 16:30, the remote on Movie Catalog, Overgeared to finish. Click one to see it full size.</p></div>';
+    stage.hidden = true; grid.hidden = false;
+    grid.innerHTML = D.map((d, i) => `<button class="card" data-id="${d.id}"><div class="frame">${d.html()}</div><h3><b>${String(i + 1).padStart(2, '0')}</b>${d.name}</h3><p>${d.tag} · ${d.load} on the stick</p></button>`).join('');
+    grid.onclick = (e) => { const c = e.target.closest('.card'); if (c) { show(c.dataset.id); window.scrollTo(0, 0); } };
+  } else {
+    const i = D.findIndex((d) => d.id === id), d = D[i];
+    note.innerHTML = `<div><h2>${String(i + 1).padStart(2, '0')} · ${d.name}</h2><p>${d.about}</p></div>
+      <div class="facts"><span>Feel <b>${d.tag}</b></span><span>On the 1 GB stick <b>${d.load}</b></span><span>Type <b>${d.type}</b></span></div>`;
+    grid.hidden = true; stage.hidden = false;
+    stage.innerHTML = `<div class="frame">${d.html()}</div>`;
+  }
+  fit();
+}
+document.addEventListener('keydown', (e) => {
+  if (e.target.closest('input,select,textarea') || cur === 'all') return;
+  const i = D.findIndex((d) => d.id === cur);
+  if (e.key === 'ArrowRight') show(D[(i + 1) % D.length].id);
+  if (e.key === 'ArrowLeft') show(D[(i + D.length - 1) % D.length].id);
+});
+show(cur);
+document.fonts?.ready.then(fit);
+</script>

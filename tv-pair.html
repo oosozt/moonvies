@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Moonvies · Pair this TV</title>
+<style>
+  :root { --bg: #0a0520; --text: #dff8ff; --muted: #9d97cf; --cyan: #3df2ff; --pink: #ff2e88; --pink-soft: #ff8ad1; --bad: #ff5c7a;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace; --cut: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px)); }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 18px/1.5 var(--mono); }
+  body { display: grid; place-items: center;
+    background: radial-gradient(ellipse at 50% 120%, #ff2e8840, transparent 60%), radial-gradient(ellipse at 50% -20%, #3df2ff25, transparent 60%), var(--bg); }
+  .box { width: min(760px, 90vw); text-align: center; }
+  h1 { margin: 0 0 6px; font-size: 34px; letter-spacing: .14em; text-transform: uppercase; color: var(--pink-soft); text-shadow: 0 0 18px #ff2e8899; }
+  p { color: var(--muted); margin: 0 0 26px; }
+  ol { text-align: left; display: inline-block; margin: 0 0 28px; color: var(--text); }
+  ol b { color: var(--cyan); }
+  input { width: 8.5ch; font: 700 54px var(--mono); letter-spacing: .3em; text-align: center; padding: 10px 6px 10px 22px; color: #fff;
+    background: #140a30; border: 2px solid var(--cyan); outline: none; clip-path: var(--cut); }
+  input:focus { border-color: var(--pink); box-shadow: 0 0 0 4px #ff2e8855; }
+  button { margin-left: 14px; vertical-align: top; height: 88px; padding: 0 34px; font: 700 22px var(--mono); letter-spacing: .12em; text-transform: uppercase;
+    color: #fff; background: var(--pink); border: 0; clip-path: var(--cut); cursor: pointer; }
+  button:focus { outline: none; box-shadow: inset 0 0 0 4px #fff; }
+  .err { min-height: 30px; margin-top: 18px; color: var(--bad); }
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>Pair this TV</h1>
+  <p>One time only. After this the TV opens straight into your catalog.</p>
+  <ol>
+    <li>On your phone or PC, open the catalog.</li>
+    <li>Open <b>⬇ Downloads</b> (top right) and press <b>📺 TV app</b>.</li>
+    <li>Type the 6-digit code it shows here.</li>
+  </ol>
+  <form id="f"><input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" autofocus aria-label="Pairing code"><button>Pair</button></form>
+  <div class="err" id="err"></div>
+</div>
+<script>
+  const f = document.getElementById('f'), code = document.getElementById('code'), err = document.getElementById('err');
+  code.addEventListener('input', () => { code.value = code.value.replace(/\D/g, '').slice(0, 6); if (code.value.length === 6) f.requestSubmit(); });
+  f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (code.value.length !== 6) { err.textContent = 'The code has 6 digits.'; return; }
+    err.textContent = 'Checking…';
+    try {
+      const r = await fetch('/api/tv/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code.value }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Could not pair');
+      location.replace('/?tv=1');
+    } catch (x) { err.textContent = x.message; code.select(); }
+  });
+  // The remote's arrow keys: down from the code goes to Pair, up comes back.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || (e.key === 'ArrowRight' && document.activeElement === code && code.selectionStart === code.value.length)) { f.querySelector('button').focus(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { if (document.activeElement !== code) { code.focus(); e.preventDefault(); } }
+  });
+</script>
+</body>
+</html>
