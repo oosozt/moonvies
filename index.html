@@ -1372,7 +1372,7 @@ async function renderEpisodes() {
     const e = ep.episode_number, at = map.get(e), aired = ep.air_date && ep.air_date <= today;
     const w = at && !at.active ? watchAt(at.d, at.n) : null, seen = at && !at.active && isWatched(at.d, at.n), part = inProgress(w) && w.d ? w.t / w.d : 0;
     let act;
-    if (at?.active) act = `<span class="epdl">⬇ ${Math.floor(frac(at.d) * 100)}%</span>`;
+    if (at?.active) act = `<span class="epdl">⬇ ${Math.floor(frac(at.d) * 100)}%</span>${frac(at.d) > 0 ? `<button class="btn sm pri" data-a="play" data-id="${at.d.id}" data-n="0">▶ Play now</button>` : ''}`;
     else if (at) act = `<button class="btn sm pri" data-a="play" data-id="${at.d.id}" data-n="${at.n}">${part ? '▶ Resume ' + fmtTime(w.t) : seen ? '↻ Again' : '▶ Play'}</button>`;
     else if (!aired) act = `<span class="muted">${ep.air_date ? 'Airs ' + new Date(ep.air_date).toLocaleDateString() : 'Not aired yet'}</span>`;
     else act = `<button class="btn sm" data-a="get">⬇ Download</button><button class="btn ghost sm" data-a="choose" title="See every download for this episode">Choose…</button>`;
@@ -1667,6 +1667,7 @@ function renderDrawer() {
       <div class="prog"><div style="width:${pct}%"></div></div>
       <div class="dls"><b style="color:var(--text)">${pct.toFixed(1)}%</b>${d.size ? ' of ' + fmtBytes(d.size) : ''} · ${esc(label)}</div>
       <div class="dla">
+        ${pct > 0 && d.status !== 'failed' ? '<button data-a="play" class="pri">▶ Play now</button>' : ''}
         ${d.status === 'paused' ? `<button data-a="resume">Resume</button>` : `<button data-a="pause">Pause</button>`}
         <button data-a="delete">Cancel</button>
         <label><input type="checkbox" data-a="autoOpen" ${d.autoOpen ? 'checked' : ''}> Open when finished</label>
@@ -1706,11 +1707,31 @@ async function removeDownload(id, label, btn) {
   pollDownloads(true);
 }
 
+/* Watching a download that's still coming: an HLS stream from the PC, played with hls.js
+   (or natively where the browser can, like Safari on iPhone). hls.js loads only when needed. */
+let liveHls = null;
+function liveStop() { try { liveHls?.destroy(); } catch {} liveHls = null; }
+async function liveAttach(v, url, start) {
+  if (!window.Hls) await new Promise((ok, fail) => {
+    const sc = document.createElement('script'); sc.src = '/hls.min.js';
+    sc.onload = ok; sc.onerror = () => fail(new Error('The stream player (hls.min.js) could not load.'));
+    document.head.appendChild(sc);
+  });
+  if (window.Hls?.isSupported()) {
+    liveHls = new Hls({ startPosition: start || 0, maxBufferLength: 60, backBufferLength: 60 });
+    liveHls.loadSource(url); liveHls.attachMedia(v);
+    liveHls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal && d.type === Hls.ErrorTypes.NETWORK_ERROR) setTimeout(() => liveHls?.startLoad(), 3000); });
+  } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
+    v.src = url;
+    if (start) v.addEventListener('loadedmetadata', () => { v.currentTime = start; }, { once: true });
+  } else throw new Error("This browser can't play a stream while it downloads. Wait for it to finish.");
+}
+
 /* in-browser player (streams from the PC) */
 const pdlg = $('#pdlg');
 pdlg.addEventListener('close', () => {
   if (pdlg.open) return;
-  playerSave?.(); playerSave = null; player = null; playerStrip = null;
+  playerSave?.(); playerSave = null; player = null; playerStrip = null; liveStop();
   if (TV) tvStatus({ open: false });
   if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -1896,8 +1917,32 @@ async function playMedia(id, title, startAt, atTime) {
       : 'vlc://' + vid.external;
     $('#pnote').textContent = `${vid.name} · ${fmtBytes(vid.size)}`;
     fillSubs(i);
+    liveStop();
     // a player that can't show HEVC (an old TV web engine) gets a 720p H.264 copy, made once on the PC
     const h = vid.vcodec && vid.vcodec !== 'h264' && !HEVC_OK ? 1 : 0;
+    if (m.live) {
+      // Still downloading: a stream that grows with the download, from the parts that are already here.
+      v.pause(); v.removeAttribute('src'); v.load();
+      $('#pprep').hidden = false; $('#pprepNote').textContent = 'It plays while it downloads. You can skip ahead as far as it has come.';
+      // streams go through MediaSource, which may lack HEVC even where plain files have it
+      const hl = h || (vid.vcodec === 'hevc' && !(window.MediaSource?.isTypeSupported('video/mp4; codecs="hvc1.2.4.L120.90"')
+        || window.MediaSource?.isTypeSupported('video/mp4; codecs="hvc1.1.6.L120.90"'))) ? 1 : 0;
+      let ls;
+      while (my === seq && pdlg.open) {
+        ls = await local(`/api/live/${id}/${i}?a=${a}${hl ? '&h=1' : ''}`, {}).catch((e) => ({ state: 'error', error: e.message }));
+        if (ls.state === 'ready') break;
+        if (ls.state === 'error') { $('#pprepTitle').textContent = "Can't play it yet"; $('#pprepNote').textContent = ls.error; return; }
+        $('#pprepTitle').textContent = ls.state === 'waiting' ? 'Waiting for the start of the video to download…' : 'Starting the stream…';
+        $('#pprepBar').style.width = (ls.pct || 0) + '%';
+        await sleep(1500);
+      }
+      if (my !== seq || !pdlg.open) return;
+      $('#pprep').hidden = true;
+      const w0 = m.videos[i].watch;
+      try { await liveAttach(v, ls.url, at ?? (inProgress(w0) ? w0.t : 0)); }
+      catch (e) { $('#pnote').textContent = e.message; return; }
+      $('#pnote').textContent = `${vid.name} · still downloading`;
+    } else {
     const askA = () => local(`/api/media/${id}/phone/${i}?a=${a}${h ? '&h=1' : ''}`, {}).catch((e) => ({ state: 'error', error: e.message }));
     let st = a > 0 || h ? await askA() : vid.phone;
     if (my !== seq) return;
@@ -1924,6 +1969,7 @@ async function playMedia(id, title, startAt, atTime) {
       fillSubs(i); // the built-in subtitles exist now
     }
     v.src = srcOf(i, st.state === 'ready', a, st.h || 0);
+    }
     fillAudio(m.videos[i]);
     v.onerror = () => { $('#pnote').textContent = `This browser can't play this file. Use "Open in VLC" or "Copy link" with another player.`; };
 
@@ -1940,7 +1986,7 @@ async function playMedia(id, title, startAt, atTime) {
     const report = (extra) => {
       if (!isFinite(v.duration) || !v.duration) return;
       lastSave = Date.now();
-      const body = { id, n: i, t: v.currentTime, d: v.duration, ...extra };
+      const body = { id, n: i, t: v.currentTime, d: (m.live && m.videos[i].dur) || v.duration, ...extra };
       m.videos[i].watch = { ...(m.videos[i].watch || {}), t: body.t, d: body.d, w: extra?.watched ?? (m.videos[i].watch?.w || body.t >= body.d * 0.92) };
       fetch('/api/progress', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: true }).catch(() => {});
     };
@@ -1979,7 +2025,7 @@ async function playMedia(id, title, startAt, atTime) {
       return ch ? ch.start : v.duration - (v.duration < 1800 ? 90 : 45);
     },
     check() {
-      if (this.shown || !m.tv || !isFinite(v.duration) || v.duration < 300 || this.i !== cur || v.currentTime < this.startsAt()) return;
+      if (this.shown || m.live || !m.tv || !isFinite(v.duration) || v.duration < 300 || this.i !== cur || v.currentTime < this.startsAt()) return;
       const nx = nextOf(cur), info = this.info?.next;
       if (!nx && !info) return;
       this.shown = true; this.show(nx, info);

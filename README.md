@@ -34,6 +34,10 @@ TV open it over your home Wi-Fi or over Tailscale.
 - Play on TV: send what you're watching to the TV app and use the phone as the remote.
 - Disk view: free space, and watched downloads you can clear (they go to a bin first).
 - Download guard: only films, episodes and their subtitles get through (see below).
+- Play while downloading: **▶ Play now** on a download that's still coming. Moonvies checks every
+  piece against the torrent's checksums before using it and streams what's there as HLS (played with
+  the bundled [hls.js](https://github.com/video-dev/hls.js), Apache 2.0); you can skip ahead as far as
+  the download has come. torlink fetches pieces in order, so the start is ready early.
 
 ## Download guard
 

@@ -3,14 +3,14 @@
 // - Bridges to torlink: runs `torlnk search`, drives a `torlnk serve` instance for
 //   downloads, reports progress, and opens finished downloads in the default player.
 import { createServer } from 'node:http';
-import { readFile, writeFile, stat, readdir, mkdir, rename, rm, statfs } from 'node:fs/promises';
+import { readFile, writeFile, stat, readdir, mkdir, rename, rm, statfs, open as openFile } from 'node:fs/promises';
 import { existsSync, createReadStream, openSync, closeSync, readdirSync, readFileSync } from 'node:fs';
 import { inflateRawSync } from 'node:zlib';
 import { extname, join, normalize, resolve, sep, basename, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { exec, spawn, execFile } from 'node:child_process';
 import os from 'node:os';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const port = Number(process.env.PORT) || 5178;
@@ -816,6 +816,151 @@ setInterval(async () => {
   } finally { guardBusy = false; }
 }, 3000);
 
+/* ---------- play while downloading ---------- */
+// A download that is still coming can be watched. Moonvies reads the video piece by piece and uses
+// a piece only once its checksum matches the torrent's, so half-written data never reaches the
+// player; ffmpeg turns that into an HLS stream that grows with the download. WebTorrent (torlink's
+// engine) fetches pieces in order, so the start of a video is there early.
+const LIVE_DIR = join(PHONE_DIR, 'live');
+function torrentLayout(id) {
+  const file = join(TORRENT_DIR, id + '.torrent');
+  if (!existsSync(file)) return null;
+  const info = bdecode(readFileSync(file)).info || {};
+  const str = (b) => (Buffer.isBuffer(b) ? b.toString('utf8') : String(b ?? ''));
+  const name = str(info['name.utf-8'] || info.name), base = resolve(DL_DIR);
+  const files = []; let off = 0;
+  const list = Array.isArray(info.files) ? info.files.map((f) => ({ parts: [name, ...(f['path.utf-8'] || f.path || []).map(str)], length: f.length }))
+    : [{ parts: [name], length: info.length }];
+  for (const f of list) {
+    const path = resolve(base, ...f.parts);
+    if (!path.startsWith(base + sep) || f.parts.some((x) => x === '..')) return null; // a name trying to leave the folder
+    files.push({ rel: f.parts.slice(Array.isArray(info.files) ? 1 : 0).join('/'), path, start: off, length: f.length });
+    off += f.length;
+  }
+  return { name, pieceLen: info['piece length'], hashes: info.pieces, files, total: off };
+}
+// the videos of a torrent, in the order a finished download lists them (so progress keys match)
+const liveVids = (L) => L.files.filter((f) => VIDEO.has(extOf(f.rel)))
+  .sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }));
+// bytes [g, g+len) of the torrent, across its files; null when any part isn't on the disk yet
+async function readGlobal(L, g, len) {
+  const out = Buffer.alloc(len);
+  for (const f of L.files) {
+    const a = Math.max(g, f.start), b = Math.min(g + len, f.start + f.length);
+    if (a >= b) continue;
+    const fh = await openFile(f.path, 'r').catch(() => null);
+    if (!fh) return null;
+    try { const { bytesRead } = await fh.read(out, a - g, b - a, a - f.start); if (bytesRead < b - a) return null; }
+    finally { await fh.close(); }
+  }
+  return out;
+}
+const pieceOk = (L, p, buf) => buf && createHash('sha1').update(buf).digest().equals(L.hashes.subarray(p * 20, p * 20 + 20));
+// how much of a video is there, counted in whole checked pieces from its start
+async function readyBytes(L, f) {
+  let g = f.start; const end = f.start + f.length;
+  while (g < end) {
+    const p = Math.floor(g / L.pieceLen), ps = p * L.pieceLen, pe = Math.min(ps + L.pieceLen, L.total);
+    if (!pieceOk(L, p, await readGlobal(L, ps, pe - ps))) break;
+    g = pe;
+  }
+  return Math.min(g, end) - f.start;
+}
+
+const liveSessions = new Map(); // key -> { id, dir, proc, stopped, lastHit, error, fed, length }
+async function feedLive(L, f, s) {
+  let g = f.start; const end = f.start + f.length;
+  try {
+    while (g < end && !s.stopped) {
+      const p = Math.floor(g / L.pieceLen), ps = p * L.pieceLen, pe = Math.min(ps + L.pieceLen, L.total);
+      const buf = await readGlobal(L, ps, pe - ps);
+      if (!pieceOk(L, p, buf)) { await sleep(1500); continue; } // not downloaded yet
+      const chunk = buf.subarray(g - ps, Math.min(end, pe) - ps);
+      if (!s.proc.stdin.write(chunk)) await new Promise((r) => { s.proc.stdin.once('drain', r); s.proc.once('close', r); });
+      g = ps + (Math.min(end, pe) - ps); s.fed = g - f.start;
+    }
+  } catch (e) { if (!s.stopped) s.error = e.message; }
+  try { s.proc.stdin.end(); } catch {}
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function probeHead(path) {
+  return new Promise((ok) => execFile(FFPROBE, ['-v', 'error', '-print_format', 'json', '-show_streams', '-show_format', path], { windowsHide: true, timeout: 15000, maxBuffer: 5e6 },
+    (err, out) => { try { ok(err ? null : JSON.parse(out)); } catch { ok(null); } }));
+}
+async function startLive(id, n, a, h) {
+  const k = phoneKey(id, n, a, h);
+  let s = liveSessions.get(k);
+  if (s && !s.error) { s.lastHit = Date.now(); return s; }
+  const L = torrentLayout(id);
+  if (!L) return { state: 'waiting' };
+  const f = liveVids(L)[n];
+  if (!f) throw Object.assign(new Error('no such video'), { status: 404 });
+  // the file's header has to be here (and checked) before ffmpeg can make sense of it
+  if ((await readyBytes(L, f)) < Math.min(f.length, 4 * L.pieceLen, 16 << 20)) return { state: 'waiting' };
+  const info = await probeHead(f.path);
+  const v = info?.streams?.find((x) => x.codec_type === 'video');
+  if (!v) return { state: 'waiting' };
+  const dir = join(LIVE_DIR, k);
+  await rm(dir, { recursive: true, force: true }).catch(() => {});
+  await mkdir(dir, { recursive: true });
+  const video = h && v.codec_name !== 'h264'
+    ? ['-vf', 'scale=-2:min(720\\,ih)', '-c:v', 'libx264', '-preset', 'superfast', '-crf', '21', '-pix_fmt', 'yuv420p', '-g', '96', '-keyint_min', '96', '-sc_threshold', '0']
+    : ['-c:v', 'copy', ...(v.codec_name === 'hevc' ? ['-tag:v', 'hvc1'] : [])];
+  const args = ['-hide_banner', '-loglevel', 'error', '-y', '-fflags', '+genpts', '-i', 'pipe:0', '-map', '0:v:0', '-map', `0:a:${a}?`, ...video,
+    '-c:a', 'aac', '-ac', '2', '-b:a', '192k', '-sn', '-dn', '-map_chapters', '-1',
+    '-f', 'hls', '-hls_time', '4', '-hls_list_size', '0', '-hls_playlist_type', 'event', '-hls_segment_type', 'fmp4',
+    '-hls_fmp4_init_filename', 'init.mp4', '-hls_segment_filename', join(dir, 's%05d.m4s'), join(dir, 'index.m3u8')];
+  s = { id, dir, stopped: false, lastHit: Date.now(), error: null, fed: 0, length: f.length, dur: Number(info.format?.duration) || 0, errTail: '' };
+  s.proc = spawn(FFMPEG, args, { windowsHide: true, cwd: dir }); // ffmpeg writes init.mp4 into its working folder
+  s.proc.stdin.on('error', () => {});
+  s.proc.stderr.on('data', (c) => { s.errTail = (s.errTail + c).slice(-600); });
+  s.proc.on('close', (code) => { s.done = true; if (code && !s.stopped && !s.error) s.error = s.errTail.trim().split('\n').pop() || `ffmpeg exited ${code}`; });
+  liveSessions.set(k, s);
+  feedLive(L, f, s);
+  console.log(`Streaming while downloading: ${f.rel}`);
+  return s;
+}
+async function liveState(s) {
+  if (!s.dir) return s; // { state: 'waiting' }
+  if (s.error) return { state: 'error', error: `Can't stream this file before it finishes (${s.error}).` };
+  const pl = await readFile(join(s.dir, 'index.m3u8'), 'utf8').catch(() => '');
+  const segs = (pl.match(/#EXTINF/g) || []).length;
+  return { state: segs >= 2 || /#EXT-X-ENDLIST/.test(pl) ? 'ready' : 'starting', pct: s.length ? Math.round(s.fed / s.length * 100) : 0,
+    url: `/api/live/${s.id}/${basename(s.dir)}/index.m3u8`, dur: s.dur };
+}
+// streams nobody watched for 20 minutes stop; their files go
+setInterval(async () => {
+  for (const [k, s] of liveSessions) {
+    if (Date.now() - s.lastHit < 20 * 60e3) continue;
+    s.stopped = true; try { s.proc.kill(); } catch {}
+    liveSessions.delete(k);
+    await rm(s.dir, { recursive: true, force: true }).catch(() => {});
+  }
+}, 60e3);
+rm(LIVE_DIR, { recursive: true, force: true }).catch(() => {}); // leftovers from the last run
+
+// What /api/media answers for a download that's still coming.
+async function liveMedia(id, req) {
+  if ((await history()).some((x) => x.id === id)) return null;
+  const L = torrentLayout(id);
+  if (!L) return null;
+  const vids = liveVids(L);
+  if (!vids.length) return null;
+  const total = vids.reduce((n, f) => n + f.length, 0);
+  const biggest = vids.reduce((bi, f, i) => (f.length > vids[bi].length ? i : bi), 0);
+  const videos = [];
+  for (const [i, f] of vids.entries()) {
+    const head = existsSync(f.path) ? await probeHead(f.path) : null;
+    const tag = (x) => x.tags || {};
+    videos.push({ index: i, name: f.rel, size: f.length, ext: extOf(f.rel).slice(1), phone: { state: 'live' },
+      audio: (head?.streams || []).filter((x) => x.codec_type === 'audio').map((x) => ({ lang: tag(x).language || '', title: tag(x).title || '', ch: x.channels || 0 })),
+      vcodec: head?.streams?.find((x) => x.codec_type === 'video')?.codec_name || '', dur: Number(head?.format?.duration) || 0,
+      watch: progress[`${id}:${i}`] || null, chapters: [], external: '' });
+  }
+  return { name: L.name, live: true, start: vids.length && vids[biggest].length >= total * 0.6 ? biggest : 0, videos,
+    tv: meta[id]?.item?.type === 'tv' || !!parseSE(L.name) || vids.length > 1, subs: [], subdl: !!settings.subdlKey, ffmpeg: !!FFMPEG, cast: null };
+}
+
 /* ---------- API ---------- */
 function readJson(req) {
   return new Promise((ok) => {
@@ -1111,7 +1256,30 @@ async function api(req, res, path) {
   // GET  /api/media/<id>/sub/<k>.vtt      → subtitle k as WebVTT
   // POST /api/media/<id>/phone/<n>        → start making the phone version
   // GET  /api/media/<id>/thumbs/<n>[/<s>.jpg] → seek previews (started on first ask), or sheet s
+  // POST /api/live/<id>/<n>?a=&h=   → start (or check) watching a download that's still coming
+  // GET  /api/live/<id>/<key>/<file>  → its HLS playlist and pieces
+  const lv = /^\/api\/live\/([a-f0-9]{40})\/(\d+)$/.exec(path);
+  if (lv && req.method === 'POST') {
+    if (!FFMPEG) return send(res, 501, { error: 'ffmpeg is not installed on the PC' });
+    const q = new URL(req.url, 'http://x').searchParams;
+    const s = await startLive(lv[1], Number(lv[2]), Math.max(0, Number(q.get('a')) || 0), q.get('h') === '1' ? 1 : 0);
+    return send(res, 200, await liveState(s));
+  }
+  const lf = /^\/api\/live\/([a-f0-9]{40})\/([\w.-]+)\/(index\.m3u8|init\.mp4|s\d{5}\.m4s)$/.exec(path);
+  if (lf) {
+    const s = liveSessions.get(lf[2]);
+    if (!s || s.id !== lf[1]) return send(res, 404, { error: 'not streaming' });
+    s.lastHit = Date.now();
+    const data = await readFile(join(s.dir, lf[3])).catch(() => null);
+    if (!data) return send(res, 404, { error: 'not there yet' });
+    res.writeHead(200, { 'Content-Type': lf[3].endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp4', 'Cache-Control': lf[3].endsWith('.m3u8') ? 'no-cache' : 'max-age=3600' }).end(data);
+    return;
+  }
   const mm = /^\/api\/media\/([a-f0-9]{40})(?:\/(video|sub|phone|thumbs)\/(\d+)(?:\.vtt|\/.*)?)?$/.exec(path);
+  if (mm && !mm[2]) {
+    const lm = await liveMedia(mm[1], req); // still downloading: played as a stream
+    if (lm) return send(res, 200, lm);
+  }
   if (mm) {
     const h = (await history()).find((x) => x.id === mm[1]);
     const media = h && await mediaOf(h);
