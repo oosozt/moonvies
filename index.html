@@ -1711,7 +1711,7 @@ async function removeDownload(id, label, btn) {
    (or natively where the browser can, like Safari on iPhone). hls.js loads only when needed. */
 let liveHls = null, liveSubTimer = null;
 function liveStop() { try { liveHls?.destroy(); } catch {} liveHls = null; clearInterval(liveSubTimer); }
-async function liveAttach(v, url, start) {
+async function liveAttach(v, url, start, heal) {
   if (!window.Hls) await new Promise((ok, fail) => {
     const sc = document.createElement('script'); sc.src = '/hls.min.js';
     sc.onload = ok; sc.onerror = () => fail(new Error('The stream player (hls.min.js) could not load.'));
@@ -1720,7 +1720,11 @@ async function liveAttach(v, url, start) {
   if (window.Hls?.isSupported()) {
     liveHls = new Hls({ startPosition: start || 0, maxBufferLength: 60, backBufferLength: 60 });
     liveHls.loadSource(url); liveHls.attachMedia(v);
-    liveHls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal && d.type === Hls.ErrorTypes.NETWORK_ERROR) setTimeout(() => liveHls?.startLoad(), 3000); });
+    liveHls.on(Hls.Events.ERROR, (_, d) => {
+      if (!d.fatal) return;
+      if (d.type === Hls.ErrorTypes.MEDIA_ERROR) liveHls?.recoverMediaError();
+      else heal?.(); // the playlist or its parts can't be had any more: start the stream again
+    });
   } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
     v.src = url;
     if (start) v.addEventListener('loadedmetadata', () => { v.currentTime = start; }, { once: true });
@@ -1927,19 +1931,40 @@ async function playMedia(id, title, startAt, atTime) {
       // streams go through MediaSource, which may lack HEVC even where plain files have it
       const hl = h || (vid.vcodec === 'hevc' && !(window.MediaSource?.isTypeSupported('video/mp4; codecs="hvc1.2.4.L120.90"')
         || window.MediaSource?.isTypeSupported('video/mp4; codecs="hvc1.1.6.L120.90"'))) ? 1 : 0;
-      let ls;
-      while (my === seq && pdlg.open) {
-        ls = await local(`/api/live/${id}/${i}?a=${a}${hl ? '&h=1' : ''}`, {}).catch((e) => ({ state: 'error', error: e.message }));
-        if (ls.state === 'ready') break;
-        if (ls.state === 'error') { $('#pprepTitle').textContent = "Can't play it yet"; $('#pprepNote').textContent = ls.error; return; }
-        $('#pprepTitle').textContent = ls.state === 'waiting' ? 'Waiting for the start of the video to download…' : 'Starting the stream…';
-        $('#pprepBar').style.width = (ls.pct || 0) + '%';
-        await sleep(1500);
-      }
-      if (my !== seq || !pdlg.open) return;
+      // the stream, once it reaches `from` seconds (or has ended); null when it can't be had
+      const getLive = async (from) => {
+        while (my === seq && pdlg.open) {
+          // no answer at all (the PC is restarting, the Wi-Fi dropped): keep asking
+          const ls = await local(`/api/live/${id}/${i}?a=${a}${hl ? '&h=1' : ''}`, {}).catch((e) => (e instanceof TypeError ? { state: 'offline' } : { state: 'error', error: e.message }));
+          if (ls.state === 'ready' && (ls.ended || ls.secs >= from + 8)) return ls;
+          if (ls.state === 'error') { $('#pprepTitle').textContent = "Can't play it yet"; $('#pprepNote').textContent = ls.error; return null; }
+          $('#pprepTitle').textContent = ls.state === 'offline' ? 'Waiting for the PC…' : ls.state === 'waiting' ? 'Waiting for the start of the video to download…'
+            : from > 0 && ls.state === 'ready' ? `Catching up to ${fmtTime(from)}… ${fmtTime(ls.secs || 0)}` : 'Starting the stream…';
+          $('#pprepBar').style.width = (from > 0 && ls.secs ? Math.min(100, ls.secs / from * 100) : ls.pct || 0) + '%';
+          await sleep(1500);
+        }
+        return null;
+      };
+      const w0 = m.videos[i].watch, from0 = at ?? (inProgress(w0) ? w0.t : 0);
+      const ls = await getLive(from0);
+      if (!ls || my !== seq || !pdlg.open) return;
       $('#pprep').hidden = true;
-      const w0 = m.videos[i].watch;
-      try { await liveAttach(v, ls.url, at ?? (inProgress(w0) ? w0.t : 0)); }
+      // The stream went away (the PC restarted, the network dropped): get it again and carry on from here.
+      let healing = false, lastT = from0;
+      v.addEventListener('timeupdate', () => { if (my === seq && v.currentTime > 0) lastT = v.currentTime; });
+      const heal = async () => {
+        if (healing || my !== seq || !pdlg.open) return;
+        healing = true;
+        const t = Math.max(lastT, v.currentTime), wasPlaying = true;
+        try { liveHls?.destroy(); } catch {} liveHls = null; v.pause(); // the subtitle refresh keeps going
+        $('#pprep').hidden = false; $('#pprepNote').textContent = 'The stream was interrupted. Picking it up where you were.';
+        const again = await getLive(t);
+        healing = false;
+        if (!again || my !== seq || !pdlg.open) return;
+        $('#pprep').hidden = true;
+        try { await liveAttach(v, again.url, t, heal); if (wasPlaying) v.play().catch(() => {}); } catch {}
+      };
+      try { await liveAttach(v, ls.url, from0, heal); }
       catch (e) { $('#pnote').textContent = e.message; return; }
       $('#pnote').textContent = `${vid.name} · still downloading`;
       // built-in subtitles grow with the stream: reload the chosen one now and then

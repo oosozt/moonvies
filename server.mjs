@@ -928,7 +928,10 @@ async function feedLive(L, f, s) {
       const buf = await readGlobal(L, ps, pe - ps);
       if (!pieceOk(L, p, buf)) { await sleep(1500); continue; } // not downloaded yet
       const chunk = buf.subarray(g - ps, Math.min(end, pe) - ps);
-      if (!s.proc.stdin.write(chunk)) await new Promise((r) => { s.proc.stdin.once('drain', r); s.proc.once('close', r); });
+      if (!s.proc.stdin.write(chunk)) await new Promise((r) => {
+        const done = () => { s.proc.stdin.off('drain', done); s.proc.off('close', done); r(); };
+        s.proc.stdin.on('drain', done); s.proc.on('close', done);
+      });
       g = ps + (Math.min(end, pe) - ps); s.fed = g - f.start;
     }
   } catch (e) { if (!s.stopped) s.error = e.message; }
@@ -982,7 +985,8 @@ async function liveState(s) {
   if (s.error) return { state: 'error', error: `Can't stream this file before it finishes (${s.error}).` };
   const pl = await readFile(join(s.dir, 'index.m3u8'), 'utf8').catch(() => '');
   const segs = (pl.match(/#EXTINF/g) || []).length;
-  return { state: segs >= 2 || /#EXT-X-ENDLIST/.test(pl) ? 'ready' : 'starting', pct: s.length ? Math.round(s.fed / s.length * 100) : 0,
+  const secs = [...pl.matchAll(/#EXTINF:([\d.]+)/g)].reduce((t, x) => t + Number(x[1]), 0);
+  return { state: segs >= 2 || /#EXT-X-ENDLIST/.test(pl) ? 'ready' : 'starting', pct: s.length ? Math.round(s.fed / s.length * 100) : 0, secs, ended: /#EXT-X-ENDLIST/.test(pl),
     url: `/api/live/${s.id}/${basename(s.dir)}/index.m3u8`, dur: s.dur };
 }
 // streams nobody watched for 20 minutes stop; their files go
