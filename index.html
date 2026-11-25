@@ -1710,25 +1710,65 @@ async function removeDownload(id, label, btn) {
 /* Watching a download that's still coming: an HLS stream from the PC, played with hls.js
    (or natively where the browser can, like Safari on iPhone). hls.js loads only when needed. */
 let liveHls = null, liveSubTimer = null;
-function liveStop() { try { liveHls?.destroy(); } catch {} liveHls = null; clearInterval(liveSubTimer); }
+function liveStop() { try { liveHls?.destroy(); } catch {} liveHls = null; liveMode = ''; clearInterval(liveSubTimer); }
 async function liveAttach(v, url, start, heal) {
-  if (!window.Hls) await new Promise((ok, fail) => {
-    const sc = document.createElement('script'); sc.src = '/hls.min.js';
-    sc.onload = ok; sc.onerror = () => fail(new Error('The stream player (hls.min.js) could not load.'));
-    document.head.appendChild(sc);
-  });
-  if (window.Hls?.isSupported()) {
-    liveHls = new Hls({ startPosition: start || 0, maxBufferLength: 60, backBufferLength: 60 });
-    liveHls.loadSource(url); liveHls.attachMedia(v);
-    liveHls.on(Hls.Events.ERROR, (_, d) => {
-      if (!d.fatal) return;
-      if (d.type === Hls.ErrorTypes.MEDIA_ERROR) liveHls?.recoverMediaError();
-      else heal?.(); // the playlist or its parts can't be had any more: start the stream again
-    });
-  } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
-    v.src = url;
-    if (start) v.addEventListener('loadedmetadata', () => { v.currentTime = start; }, { once: true });
-  } else throw new Error("This browser can't play a stream while it downloads. Wait for it to finish.");
+  liveMode = '';
+  const nativeOk = !!v.canPlayType('application/vnd.apple.mpegurl');
+  // TV web engines give a page's stream buffer only a few MB (one HD piece is more): there the
+  // browser's own HLS player goes, which has no such limit
+  if (!(TV && nativeOk)) {
+    if (!window.Hls) await new Promise((ok, fail) => {
+      const sc = document.createElement('script'); sc.src = '/hls.min.js';
+      sc.onload = ok; sc.onerror = () => fail(new Error('The stream player (hls.min.js) could not load.'));
+      document.head.appendChild(sc);
+    }).catch((e) => { if (!nativeOk) throw e; });
+    if (window.Hls?.isSupported()) {
+      liveMode = 'hls';
+      liveHls = new Hls({ startPosition: start || 0, maxBufferLength: 60, backBufferLength: 60 });
+      liveHls.loadSource(url); liveHls.attachMedia(v);
+      let fails = 0;
+      liveHls.on(Hls.Events.ERROR, (_, d) => {
+        if (!d.fatal) return;
+        const full = d.details === 'bufferAppendError' || /full/i.test(String(d.error?.message || d.reason || ''));
+        if (full && nativeOk) { // this browser's buffer is too small for these pieces: hand over to its own player
+          const t = v.currentTime || start || 0;
+          try { liveHls.destroy(); } catch {} liveHls = null;
+          return liveNative(v, url, t, heal);
+        }
+        if (d.type === Hls.ErrorTypes.MEDIA_ERROR && ++fails < 4) liveHls?.recoverMediaError();
+        else heal?.(); // the playlist or its parts can't be had any more: start the stream again
+      });
+      return;
+    }
+  }
+  if (nativeOk) return liveNative(v, url, start, heal);
+  throw new Error("This browser can't play a stream while it downloads. Wait for it to finish.");
+}
+// The browser's own HLS player, given what's there so far as a finished video (so it has a length and
+// can seek); liveGrow() hands it a longer one as playback nears the end.
+let liveMode = '', liveUrl = '', liveGrowing = false;
+function liveNative(v, url, start, heal) {
+  liveMode = 'native'; liveUrl = url;
+  v.onerror = () => heal?.();
+  v.src = url + '?vod=1&r=' + Date.now();
+  if (start) v.addEventListener('loadedmetadata', () => { v.currentTime = start; }, { once: true });
+  v.play().catch(() => {});
+}
+async function liveGrow(v, force) {
+  if (liveMode !== 'native' || liveGrowing || !isFinite(v.duration)) return false;
+  if (!force && v.duration - v.currentTime > 30) return false;
+  liveGrowing = true;
+  try {
+    const pl = await fetch(liveUrl, { cache: 'no-store' }).then((r) => r.text()).catch(() => '');
+    const secs = [...pl.matchAll(/#EXTINF:([\d.]+)/g)].reduce((t, x) => t + Number(x[1]), 0);
+    if (secs < v.duration + 10 && !(force && /#EXT-X-ENDLIST/.test(pl) && secs > v.duration + 0.5)) return false; // nothing new yet
+    const t = v.currentTime, playing = !v.paused || force;
+    v.src = liveUrl + '?vod=1&r=' + Date.now();
+    await new Promise((r) => v.addEventListener('loadedmetadata', r, { once: true }));
+    v.currentTime = t;
+    if (playing) v.play().catch(() => {});
+    return true;
+  } finally { liveGrowing = false; }
 }
 
 /* in-browser player (streams from the PC) */
@@ -1967,12 +2007,15 @@ async function playMedia(id, title, startAt, atTime) {
       try { await liveAttach(v, ls.url, from0, heal); }
       catch (e) { $('#pnote').textContent = e.message; return; }
       $('#pnote').textContent = `${vid.name} · still downloading`;
-      // built-in subtitles grow with the stream: reload the chosen one now and then
+      // built-in subtitles grow with the stream: reload the chosen one now and then; and a
+      // browser-player stream gets a longer copy as it nears the end of what it has
       clearInterval(liveSubTimer);
+      let subTick = 0;
       liveSubTimer = setInterval(() => {
         if (!v.isConnected || my !== seq) return clearInterval(liveSubTimer);
-        if (m.subs.find((x) => String(x.index) === sel.value)?.builtin) setSub();
-      }, 20000);
+        liveGrow(v);
+        if (++subTick % 4 === 0 && m.subs.find((x) => String(x.index) === sel.value)?.builtin) setSub();
+      }, 5000);
     } else {
     const askA = () => local(`/api/media/${id}/phone/${i}?a=${a}${h ? '&h=1' : ''}`, {}).catch((e) => ({ state: 'error', error: e.message }));
     let st = a > 0 || h ? await askA() : vid.phone;
@@ -2002,7 +2045,7 @@ async function playMedia(id, title, startAt, atTime) {
     v.src = srcOf(i, st.state === 'ready', a, st.h || 0);
     }
     fillAudio(m.videos[i]);
-    v.onerror = () => { $('#pnote').textContent = `This browser can't play this file. Use "Open in VLC" or "Copy link" with another player.`; };
+    if (!m.live) v.onerror = () => { $('#pnote').textContent = `This browser can't play this file. Use "Open in VLC" or "Copy link" with another player.`; };
 
     // Pick up where it was left, on this device or another.
     const w = m.videos[i].watch;
@@ -2025,7 +2068,8 @@ async function playMedia(id, title, startAt, atTime) {
     playerSave = save;
     v.ontimeupdate = () => { if (Date.now() - lastSave > 10000 && !v.paused) save(); };
     v.onpause = save;
-    v.onended = () => {
+    v.onended = async () => {
+      if (m.live && liveMode === 'native' && await liveGrow(v, true)) return; // only the end of what had downloaded
       report({ watched: true });
       const opt = $('#pep')?.options[i]; if (opt && !opt.text.startsWith('✓')) opt.text = '✓ ' + opt.text;
       // An episode: the "Next episode" card already asked during the credits. Not taken: close.

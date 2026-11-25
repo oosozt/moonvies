@@ -908,9 +908,9 @@ async function readGlobal(L, g, len) {
   return out;
 }
 const pieceOk = (L, p, buf) => buf && createHash('sha1').update(buf).digest().equals(L.hashes.subarray(p * 20, p * 20 + 20));
-// how much of a video is there, counted in whole checked pieces from its start
-async function readyBytes(L, f) {
-  let g = f.start; const end = f.start + f.length;
+// how much of a video is there, counted in whole checked pieces from its start (stops at `enough`)
+async function readyBytes(L, f, enough = Infinity) {
+  let g = f.start; const end = Math.min(f.start + f.length, f.start + enough);
   while (g < end) {
     const p = Math.floor(g / L.pieceLen), ps = p * L.pieceLen, pe = Math.min(ps + L.pieceLen, L.total);
     if (!pieceOk(L, p, await readGlobal(L, ps, pe - ps))) break;
@@ -942,16 +942,23 @@ function probeHead(path) {
   return new Promise((ok) => execFile(FFPROBE, ['-v', 'error', '-print_format', 'json', '-show_streams', '-show_format', path], { windowsHide: true, timeout: 15000, maxBuffer: 5e6 },
     (err, out) => { try { ok(err ? null : JSON.parse(out)); } catch { ok(null); } }));
 }
-async function startLive(id, n, a, h) {
+const liveStarting = new Map(); // key -> promise of a session being set up
+function startLive(id, n, a, h) {
   const k = phoneKey(id, n, a, h);
-  let s = liveSessions.get(k);
+  const s = liveSessions.get(k);
   if (s && !s.error) { s.lastHit = Date.now(); return s; }
+  if (!liveStarting.has(k)) liveStarting.set(k, startLiveNow(id, n, a, h, k).finally(() => liveStarting.delete(k)));
+  return liveStarting.get(k);
+}
+async function startLiveNow(id, n, a, h, k) {
+  let s;
   const L = torrentLayout(id);
   if (!L) return { state: 'waiting' };
   const f = liveVids(L)[n];
   if (!f) throw Object.assign(new Error('no such video'), { status: 404 });
   // the file's header has to be here (and checked) before ffmpeg can make sense of it
-  if ((await readyBytes(L, f)) < Math.min(f.length, 4 * L.pieceLen, 16 << 20)) return { state: 'waiting' };
+  const need = Math.min(f.length, 4 * L.pieceLen, 16 << 20);
+  if ((await readyBytes(L, f, need)) < need) return { state: 'waiting' };
   const info = await probeHead(f.path);
   const v = info?.streams?.find((x) => x.codec_type === 'video');
   if (!v) return { state: 'waiting' };
@@ -1326,8 +1333,15 @@ async function api(req, res, path) {
     const s = liveSessions.get(lf[2]);
     if (!s || s.id !== lf[1]) return send(res, 404, { error: 'not streaming' });
     s.lastHit = Date.now();
-    const data = await readFile(join(s.dir, lf[3])).catch(() => null);
+    let data = await readFile(join(s.dir, lf[3])).catch(() => null);
     if (!data) return send(res, 404, { error: 'not there yet' });
+    // ?vod=1: what's there so far as a finished video, for players that would otherwise treat a growing
+    // stream as live TV (no length, no seeking): the page asks again for more as it nears the end
+    if (lf[3] === 'index.m3u8' && new URL(req.url, 'http://x').searchParams.get('vod') === '1') {
+      let text = data.toString('utf8').replace('#EXT-X-PLAYLIST-TYPE:EVENT', '#EXT-X-PLAYLIST-TYPE:VOD');
+      if (!/#EXT-X-ENDLIST/.test(text)) text = text.replace(/\s*$/, '\n#EXT-X-ENDLIST\n');
+      data = Buffer.from(text);
+    }
     res.writeHead(200, { 'Content-Type': lf[3].endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp4', 'Cache-Control': lf[3].endsWith('.m3u8') ? 'no-cache' : 'max-age=3600' }).end(data);
     return;
   }
