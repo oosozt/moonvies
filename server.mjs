@@ -603,6 +603,13 @@ async function countVids(h) {
 const L2 = { eng: 'en', tur: 'tr', jpn: 'ja', fre: 'fr', fra: 'fr', ger: 'de', deu: 'de', ita: 'it', spa: 'es', por: 'pt', rus: 'ru', ara: 'ar',
   kor: 'ko', chi: 'zh', zho: 'zh', dut: 'nl', nld: 'nl', pol: 'pl', swe: 'sv', gre: 'el', ell: 'el', heb: 'he' };
 const lang2 = (c) => { c = String(c || '').toLowerCase(); return L2[c] || c.slice(0, 2); };
+// The episode a subtitle file is for, from its name: "S01E05", " - 05 ", "Show.05.srt", "EP05"
+function epOfName(name) {
+  const se = parseSE(name);
+  if (se?.episode != null) return se.episode;
+  const m = /\b(?:E|EP|Episode)[ ._-]?(\d{1,3})\b/i.exec(name) || /[ ._-](\d{1,3})(?:v\d)?\.(?:srt|ass|ssa|vtt|sub)$/i.exec(name);
+  return m ? +m[1] : null;
+}
 async function subdlSearch(h, media, n, langs) {
   const v = media.vids[n];
   const m = meta[h.id] || {}, item = m.item;
@@ -612,13 +619,25 @@ async function subdlSearch(h, media, n, langs) {
   if (item) { q.set('tmdb_id', String(item.id)); q.set('type', item.type); }
   else q.set('film_name', basename(v.name, extname(v.name)).replace(/[._]/g, ' ').replace(/\[[^\]]*\]/g, ' ').split(/\b(19|20)\d\d\b|\bS\d\d/i)[0].trim());
   if ((item?.type === 'tv' || (!item && se)) && se) { q.set('type', 'tv'); q.set('season_number', String(se.season)); if (se.episode != null) q.set('episode_number', String(se.episode)); }
-  const r = await fetch('https://api.subdl.com/api/v1/subtitles?' + q, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20000) });
-  const j = await r.json().catch(() => ({}));
-  if (!j.status) return { results: [], note: j.error || `SubDL error ${r.status}` };
+  const ask = async () => {
+    const r = await fetch('https://api.subdl.com/api/v1/subtitles?' + q, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20000) });
+    const j = await r.json().catch(() => ({}));
+    return j.status ? j : { note: j.error || `SubDL error ${r.status}` };
+  };
+  let j = await ask();
+  // Anime and older shows often only have whole-series packs, filed under no season at all:
+  // nothing for "season 1", so ask again for the show as a whole and pick the episode's file
+  if (!j.note && !(j.subtitles || []).length && q.has('season_number')) {
+    q.delete('season_number'); q.delete('episode_number');
+    j = await ask();
+  }
+  if (j.note) return { results: [], note: j.note };
   const results = [], bare = (x) => String(x || '').split('?')[0]; // links carry ?api_key=: keep the key on this PC
   for (const s of j.subtitles || []) {
     const lang = String(s.language || s.lang || '').toUpperCase();
-    const files = (s.unpack_files || []).filter((f) => se?.episode == null || f.episode == null || f.episode === se.episode);
+    // SubDL's own episode number, or (0 or missing in many packs) the one in the file's name
+    const epOf = (f) => (f.episode > 0 ? f.episode : epOfName(f.name || ''));
+    const files = (s.unpack_files || []).filter((f) => se?.episode == null || epOf(f) == null || epOf(f) === se.episode);
     if (files.length) for (const f of files) results.push({ url: bare(f.url), name: f.name, release: f.release_name || s.release_name || '', lang: String(f.language || lang).toUpperCase(), hi: !!(f.hi ?? s.hi), pack: !!s.full_season });
     else results.push({ url: bare(s.url), name: s.name || '', release: s.release_name || '', lang, hi: !!s.hi, pack: !!s.full_season });
   }
@@ -634,8 +653,8 @@ async function subdlSave(h, v, b) {
   if (buf.subarray(0, 2).toString() === 'PK') {
     const entries = unzip(buf).filter((e) => SUB_EXT.has(extname(e.name).toLowerCase()));
     if (!entries.length) fail(422, 'no subtitle file inside the download');
-    const se = parseSE(v.name), tag = se?.episode != null ? `E${String(se.episode).padStart(2, '0')}` : '';
-    const pick = (tag && entries.find((e) => e.name.toUpperCase().includes(tag))) || entries.sort((a, c) => c.data.length - a.data.length)[0];
+    const se = parseSE(v.name);
+    const pick = (se?.episode != null && entries.find((e) => epOfName(basename(e.name)) === se.episode)) || entries.sort((a, c) => c.data.length - a.data.length)[0];
     buf = pick.data; ext = extname(pick.name).toLowerCase();
   }
   if (!SUB_EXT.has(ext)) ext = '.srt';
