@@ -2599,6 +2599,15 @@ const TV_FOCUS = 'a[href], button:not([disabled]), select:not([disabled]), input
 const tvVisible = (el) => { const r = el.getBoundingClientRect(); return r.width > 2 && r.height > 2 && !el.closest('[hidden]'); };
 function tvKeepInView(el) {
   el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  // in the downloads list, show the whole card (its title sits above the buttons), and the section's
+  // heading too when it's the first card under it
+  const card = el.closest('#dlList .dl');
+  if (card) {
+    const list = $('#dlList'), head = card.previousElementSibling?.tagName === 'H4' ? card.previousElementSibling : card;
+    const over = head.getBoundingClientRect().top - list.getBoundingClientRect().top - 6;
+    if (over < 0) list.scrollTop += over;
+    if (!card.previousElementSibling?.previousElementSibling) list.scrollTop = 0; // the very first card: back to the top
+  }
   if (tvScope() !== $('#app') || el.closest('header')) return; // dialogs, the drawer and the header need no page scroll
   const r = el.getBoundingClientRect(), top = $('header').getBoundingClientRect().bottom + 12;
   if (r.top < top) scrollBy(0, r.top - top - 8);

@@ -315,7 +315,6 @@ const PHONE_DIR = join(root, 'phone');
 const TEXT_SUBS = new Set(['subrip', 'ass', 'ssa', 'webvtt', 'mov_text', 'text']);
 const PLAYABLE = new Set(['.mp4', '.m4v', '.webm', '.mov']);
 const jobs = new Map(); // "<id>-<n>" -> { pct, started, error }
-let jobQueue = Promise.resolve();
 // a > 0: only audio track a; h: video turned into 720p H.264 (for players without HEVC, like an old TV web engine)
 const phoneKey = (id, n, a = 0, h = 0) => `${id}-${n}` + (a > 0 ? `.a${a}` : '') + (h ? '.h264' : '');
 async function phoneInfo(id, n) {
@@ -335,13 +334,41 @@ function probe(file) {
   return new Promise((ok, fail) => execFile(FFPROBE, ['-v', 'error', '-print_format', 'json', '-show_streams', '-show_format', file],
     { windowsHide: true, maxBuffer: 20e6 }, (err, out) => (err ? fail(err) : ok(JSON.parse(out)))));
 }
-function startPhone(id, n, file, a = 0, h = 0) {
+/* One conversion at a time (an old laptop shouldn't run several), in order of priority: what someone
+   pressed play on (pri 1) goes before copies made in the background after a download (pri 0), and
+   even stops a background one that's running; that one starts again afterwards. */
+const waiting = []; // { k, file, job, a, h, pri, at }
+let current = null;
+function startPhone(id, n, file, a = 0, h = 0, pri = 1) {
   const k = phoneKey(id, n, a, h);
-  if (jobs.has(k) && !jobs.get(k).error) return;
+  const old = jobs.get(k);
+  if (old && !old.error) {
+    const w = waiting.find((x) => x.k === k);
+    if (w && pri > w.pri) w.pri = pri;
+    if (current?.k === k && pri > current.pri) current.pri = pri; // asked for while making it: no longer stoppable
+    else if (w && pri > (current?.pri ?? 1)) bumpCurrent();
+    return;
+  }
   const job = { pct: 0, started: false };
   jobs.set(k, job);
-  // One conversion at a time; an old laptop shouldn't run several.
-  jobQueue = jobQueue.then(() => convert(file, k, job, a, h)).then(() => jobs.delete(k), (e) => { job.error = e.message; console.log(`Phone version failed: ${e.message}`); });
+  waiting.push({ k, file, job, a, h, pri, at: Date.now() });
+  if (current && pri > current.pri) bumpCurrent();
+  nextConvert();
+}
+function bumpCurrent() { // a background copy steps aside for one someone is waiting for
+  if (!current || current.pri > 0 || !current.job.proc) return;
+  current.job.requeue = true;
+  try { current.job.proc.kill(); } catch {}
+}
+async function nextConvert() {
+  if (current || !waiting.length) return;
+  waiting.sort((x, y) => (y.pri - x.pri) || (x.at - y.at));
+  const w = current = waiting.shift();
+  try { await convert(w.file, w.k, w.job, w.a, w.h); jobs.delete(w.k); }
+  catch (e) {
+    if (w.job.requeue) { Object.assign(w.job, { pct: 0, started: false, requeue: false, proc: null }); waiting.push(w); console.log(`Paused a background copy for one someone is waiting for`); }
+    else { w.job.error = e.message; console.log(`Phone version failed: ${e.message}`); }
+  } finally { current = null; nextConvert(); }
 }
 // a > 0: a copy with only that audio track (browsers other than Safari can't switch tracks inside a file)
 async function convert(file, k, job, a = 0, h = 0) {
@@ -370,7 +397,7 @@ async function convert(file, k, job, a = 0, h = 0) {
   args.push('-map_chapters', '-1', '-movflags', '+faststart', '-sn', '-dn', tmp);
   subs.forEach((s, i) => args.push('-map', `0:${s.index}`, '-c:s', 'webvtt', join(PHONE_DIR, `${k}.s${i}.vtt`)));
   await new Promise((ok, fail) => {
-    const p = spawn(FFMPEG, args, { windowsHide: true });
+    const p = job.proc = spawn(FFMPEG, args, { windowsHide: true });
     let errTail = '';
     p.stdout.on('data', (c) => {
       const m = /out_time_us=(\d+)/.exec(String(c));
@@ -807,6 +834,7 @@ setInterval(async () => {
       if (!root.startsWith(base + sep) || !existsSync(root)) continue;
       const st = await stat(root).catch(() => null);
       const extra = st?.isDirectory() ? (await walk(root)).map((f) => f.p).filter((f) => !KEEP_EXT.has(extOf(f))) : [];
+      prepare(h).catch((e) => console.log(`Prepare failed: ${e.message}`));
       if (extra.length) {
         await tor('/control', { id: h.id, action: 'stop-seed' }).catch(() => {}); // don't share (or fetch back) what's removed
         for (const f of extra) await rm(f, { force: true }).catch(() => {});
@@ -815,6 +843,20 @@ setInterval(async () => {
     }
   } finally { guardBusy = false; }
 }, 3000);
+
+// Make a finished download ready to play anywhere before anyone asks: the MP4 copy phones need and the
+// seek previews, quietly, one at a time behind whatever someone is actually waiting for.
+async function prepare(h) {
+  if (!FFMPEG) return;
+  const media = await mediaOf(h);
+  if (!media) return;
+  for (const [i, v] of media.vids.entries()) {
+    if (media.vids.length > 1 && v.size < 40e6) continue; // samples and extras
+    if ((await phoneState(h.id, i, v.path)).state === 'none') startPhone(h.id, i, v.path, 0, 0, 0);
+    const tk = phoneKey(h.id, i);
+    if (!(await thumbInfo(tk))) startThumbs(tk, v.path);
+  }
+}
 
 /* ---------- play while downloading ---------- */
 // A download that is still coming can be watched. Moonvies reads the video piece by piece and uses
