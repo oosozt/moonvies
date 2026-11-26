@@ -27,3 +27,6 @@ moonvies.db-*
 setup-link.txt
 *.imported
 backups/
+
+# the TV app's public address (build.ps1 reads it)
+tv-app/public-url.txt

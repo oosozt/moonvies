@@ -6,7 +6,7 @@ $sdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { "$env:LOCALAPPDATA\An
 $bt = "$sdk\build-tools\34.0.0"
 $jar = "$sdk\platforms\android-34\android.jar"
 $out = "$here\build"
-$version = 4   # raise for each new release so it installs over the old one
+$version = 5   # raise for each new release so it installs over the old one
 
 if (Test-Path $out) { Remove-Item -Recurse -Force $out }
 New-Item -ItemType Directory -Force "$out\classes", "$out\dex" | Out-Null
@@ -20,7 +20,15 @@ if ($LASTEXITCODE) { throw 'aapt2 compile failed' }
     --min-sdk-version 21 --target-sdk-version 34 --version-code $version --version-name "1.$version"
 if ($LASTEXITCODE) { throw 'aapt2 link failed' }
 
+# The server's public address (like https://moonvies.example.com), from public-url.txt next to this
+# script, which stays out of git. Without it the app only finds the server at home and over Tailscale.
+$public = if (Test-Path "$here\public-url.txt") { (Get-Content "$here\public-url.txt" -Raw).Trim().TrimEnd('/') } else { '' }
+if ($public -and $public -notmatch '^https://[a-z0-9.-]+$') { throw "public-url.txt should hold just an address like https://moonvies.example.com" }
+New-Item -ItemType Directory -Force "$out\gen\com\moviecatalog\tv" | Out-Null
+Set-Content -Encoding ascii "$out\gen\com\moviecatalog\tv\Config.java" "package com.moviecatalog.tv;`n/** Made by build.ps1. */`nfinal class Config { static final String PUBLIC = `"$public`"; }"
+Write-Host "Public address: $(if ($public) { $public } else { '(none)' })"
 $src = Get-ChildItem -Recurse "$here\src" -Filter *.java | ForEach-Object FullName
+$src = @($src) + "$out\gen\com\moviecatalog\tv\Config.java"
 & javac -nowarn -source 11 -target 11 -encoding UTF-8 -classpath $jar -d "$out\classes" $src
 if ($LASTEXITCODE) { throw 'javac failed' }
 $classes = Get-ChildItem -Recurse "$out\classes" -Filter *.class | ForEach-Object FullName

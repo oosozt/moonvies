@@ -40,9 +40,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Moonvies for Android TV: a full-screen browser for the catalog running on the PC.
- * It finds the PC on the home network by itself (asking every address for /api/tv/hello),
- * then opens /tv, which pairs once with a code and from then on goes straight to the catalog.
+ * Moonvies for Android TV: a full-screen browser for the catalog running on the server.
+ * It finds the server by itself: on the home network (asking every address for /api/tv/hello),
+ * over Tailscale, or at its public address (Config.PUBLIC, set when the app is built). Then it
+ * opens /tv, which pairs once with a code and from then on goes straight to the catalog.
  */
 public class MainActivity extends Activity {
     static final int PORT = 5178;
@@ -145,7 +146,7 @@ public class MainActivity extends Activity {
             });
         }
         @JavascriptInterface
-        public void forgetServer() { prefs.edit().remove("lan").remove("base").remove("alts").apply(); }
+        public void forgetServer() { prefs.edit().remove("lan").remove("base").remove("alts").remove("last").apply(); }
     }
 
     void status(String title, String text) {
@@ -165,18 +166,23 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * The PC's home-network address first (fastest), then its Tailscale addresses (when this TV
-     * is away from home, or the home address changed), and last a search of the home network.
+     * The address that worked last time first, then the server's home-network address (fastest),
+     * its Tailscale addresses (this TV away from home, or the home address changed), a search of
+     * the home network, and last the public address (a TV in someone else's home).
      */
     void findServer(final boolean again) {
         searching = true; failedScreen = false;
-        status("MOONVIES", again ? "Lost the PC. Looking for it again…" : "Looking for your PC…");
+        status("MOONVIES", again ? "Lost the connection. Looking again…" : "Connecting…");
         new Thread(() -> {
             String lan = prefs.getString("lan", prefs.getString("base", null));
+            String last = prefs.getString("last", null);
             String found = null, body = null;
-            if (lan != null && (body = helloBody(lan, 1500)) != null) found = lan;
+            if (last != null && !last.equals(lan) && (body = helloBody(last, 4000)) != null) found = last;
+            if (found == null && lan != null && (body = helloBody(lan, 1500)) != null) found = lan;
             if (found == null) for (String a : alts()) if ((body = helloBody(a, 3000)) != null) { found = a; break; }
             if (found == null && (found = scan()) != null) body = helloBody(found, 1500);
+            if (found == null && !Config.PUBLIC.isEmpty() && (body = helloBody(Config.PUBLIC, 6000)) != null) found = Config.PUBLIC;
+            if (found != null) prefs.edit().putString("last", found).apply();
             if (found != null && isLan(found)) {
                 // remember the home address and the PC's Tailscale addresses it reports
                 SharedPreferences.Editor ed = prefs.edit().putString("lan", found);
@@ -191,8 +197,8 @@ public class MainActivity extends Activity {
                 searching = false;
                 if (go == null) {
                     failedScreen = true;
-                    status("CAN'T FIND THE CATALOG", "Make sure the PC is on and the catalog is running for phones (start-phone.cmd).<br>"
-                        + "At home this TV needs the same Wi-Fi; away from home, Tailscale has to be connected on it.<br><br>"
+                    status("CAN'T REACH MOONVIES", "Check that this TV is connected to the internet.<br>"
+                        + "If it still doesn't work, the Moonvies server may be off for a moment.<br><br>"
                         + "<b style='color:#3df2ff'>Press OK to try again.</b>");
                     return;
                 }
@@ -216,6 +222,7 @@ public class MainActivity extends Activity {
         List<String> all = alts();
         String lan = prefs.getString("lan", null);
         if (lan != null) all.add(lan);
+        if (!Config.PUBLIC.isEmpty()) all.add(Config.PUBLIC);
         for (String to : all) if (!to.equals(from)) cm.setCookie(to, "catalog=" + m.group(1) + "; Max-Age=315360000; Path=/");
     }
 

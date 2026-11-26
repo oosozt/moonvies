@@ -3059,8 +3059,9 @@ $('#tvBtn').addEventListener('click', async () => {
     <ol>
       <li>From the Play Store on the TV, install <b>Downloader</b> (the orange one, by AFTVnews).</li>
       <li>Open it, allow it to install apps when asked, and type<br><span class="tvurl">${r.apk ? esc(r.apk) : 'the TV app is not built yet'}</span></li>
-      <li>Install, then open <b>Moonvies</b> from the TV's apps. It finds this PC by itself and asks for the code above.</li>
+      <li>Install, then open <b>Moonvies</b> from the TV's apps. It finds Moonvies by itself and asks for the code above.</li>
     </ol>
+    ${r.page ? `<p class="muted">All the steps, to send to someone: <a href="${esc(r.page)}" target="_blank" rel="noopener">${esc(r.page.replace(/^https?:\/\//, ''))}</a></p>` : ''}
     <button class="btn ghost sm" id="tvNew">New code</button>`;
   $('#tvNew').onclick = () => { box.hidden = true; $('#tvBtn').click(); };
 });

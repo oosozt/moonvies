@@ -1259,8 +1259,10 @@ async function api(req, res, path) {
     // A short code to pair the TV app, shown on a device that already has access.
     if (!LAN) return send(res, 400, { error: 'Start the catalog for phones (start-phone.cmd) to use the TV app.' });
     const code = auth.pairCode(ctx); // the TV signs into this same account
+    // the app's link: the public address for someone on it, the home address at home
     const ip = lanAddresses().map((a) => a.address).find(isPrivate);
-    return send(res, 200, { code, minutes: 10, apk: existsSync(APK) ? `http://${ip || req.headers.host.replace(/:\d+$/, '')}:${port}/tv.apk` : null });
+    const base = auth.isHttps(req) ? auth.originOf(req) : `http://${ip || req.headers.host.replace(/:\d+$/, '')}:${port}`;
+    return send(res, 200, { code, minutes: 10, apk: existsSync(APK) ? `${base}/tv.apk`.replace(/^https?:\/\//, '') : null, page: auth.originOf(req) + '/get' });
   }
   if (path === '/api/search' && req.method === 'GET') {
     const u = new URL(req.url, 'http://x');
@@ -1630,7 +1632,9 @@ async function tvRoutes(req, res, path) {
   if (path === '/api/tv/hello') {
     // alt: the PC's Tailscale addresses, which the TV app tries when it's away from the home Wi-Fi
     const alt = lanAddresses().map((a) => a.address).filter((ip) => /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ip)).map((ip) => `http://${ip}:${port}`);
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }).end(JSON.stringify({ app: 'movie-catalog', name: os.hostname(), alt }));
+    // (not to the internet: the machine's name and Tailscale addresses are only any use at home)
+    const pub = auth.viaTunnel(req) && req.headers['cf-connecting-ip'];
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }).end(JSON.stringify(pub ? { app: 'movie-catalog', alt: [] } : { app: 'movie-catalog', name: os.hostname(), alt }));
     return true;
   }
   if (path === '/tv.apk') {
@@ -1638,6 +1642,12 @@ async function tvRoutes(req, res, path) {
     res.setHeader('Content-Disposition', 'attachment; filename="movie-catalog-tv.apk"');
     MIME['.apk'] = 'application/vnd.android.package-archive';
     await streamFile(req, res, APK);
+    return true;
+  }
+  if ((path === '/get' || path === '/get.html') && req.method === 'GET') {
+    // how to put the TV app on a TV: open to anyone, it's only instructions and a link
+    const data = await readFile(join(root, 'get.html'));
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }).end(data);
     return true;
   }
   if (path === '/tv' && req.method === 'GET') {

@@ -184,6 +184,10 @@ The TV app works on Android TV and Google TV (Xiaomi Mi TV Stick, Chromecast wit
    The first build makes a signing key in `tv-app/` (`signing.keystore` and `signing-password.txt`).
    **Keep both**: later versions must be signed with the same key to install over the old one.
 
+   If the server is reachable from the internet (see 8b), put its address in `tv-app/public-url.txt`
+   (just `https://moonvies.example.com`, kept out of git) before building: the app then also works on
+   TVs in other homes, trying the home network and Tailscale first and the public address last.
+
 2. Install it. Either over the network with adb (turn on **Developer options → USB debugging** on the
    TV first):
 
@@ -193,9 +197,10 @@ The TV app works on Android TV and Google TV (Xiaomi Mi TV Stick, Chromecast wit
    ```
 
    or on the TV itself: install the **Downloader** app from the TV's store and open
-   `http://<server-address>:5178/tv.apk`.
+   `http://<server-address>:5178/tv.apk`. The page `/get` on the server has these steps written out
+   for someone else, with the address to type filled in.
 
-3. Open **Moonvies** on the TV. It searches the home network for the server by itself.
+3. Open **Moonvies** on the TV. It finds the server by itself.
 4. The first time, it shows a pairing screen. On your phone or PC, open **⬇ Downloads → 📺 TV app**
    and type the 6-digit code on the TV. Done: from now on the TV opens straight into the catalog.
 
