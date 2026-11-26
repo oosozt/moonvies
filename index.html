@@ -444,12 +444,21 @@
   body.tv .grid > .card { content-visibility: auto; contain-intrinsic-size: auto 300px; }
   body.tv .card:hover .poster { transform: none; }
   /* TV: what has the remote's focus is outlined */
-  body.tv :focus { outline: 3px solid var(--pink) !important; outline-offset: 3px; }
-  body.tv .card:focus { outline-offset: 5px; }
-  body.tv .card:focus .poster { transform: translateY(-3px) scale(1.04); }
+  body.tv :focus { outline: 3px solid #fff !important; outline-offset: 2px; box-shadow: 0 0 0 7px var(--pink) !important; }
+  /* scrolling to the selection leaves room for its ring, so no side of it is cut off at an edge */
+  body.tv :focus { scroll-margin: 16px; }
+  body.tv .card:focus .t { color: #fff; }
+  /* rows clip what sticks out of them, so leave room for the focus ring and its glow */
+  body.tv .rtrack { padding: 12px 12px 16px; margin: -8px -12px -4px; }
+  body.tv .chips.seasons, body.tv .pshead .chips, body.tv .pstrack { padding: 10px 10px 12px; margin-left: -10px; margin-right: -10px; }
+  /* a sideways row of genres hides most of them off screen with no hint they're there: on TV show them all */
+  body.tv .genres { flex-wrap: wrap; overflow: visible; row-gap: 10px; padding-top: 4px; }
+  body.tv .card:focus { outline-offset: 2px; position: relative; z-index: 2; }
   body.tv .card:focus .poster::after { border-color: var(--pink); }
   body.tv .cw .cwx { display: none; }
   body.tv .pdlg :focus { outline-offset: 1px; }
+  /* the film page's ✕ sits in the corner, where the page edge would cut an outside ring off */
+  body.tv #dlg .close:focus { outline-offset: -5px; box-shadow: inset 0 0 0 7px var(--pink) !important; }
   .ptime { display: none; }
   body.tv .pdlg { max-width: 100vw; width: 100vw; height: 100vh; max-height: 100vh; margin: 0; overflow: hidden; }
   body.tv .pdlg .sheet { position: relative; height: 100vh; background: #000; border: 0; clip-path: none; overflow: hidden; }
@@ -778,7 +787,7 @@ function syncType() { for (const b of $('#typeSeg').children) b.classList.toggle
 function renderGenres() {
   const g = [...genreNames[state.type]].sort((a, b) => a[1].localeCompare(b[1]));
   $('#genres').innerHTML = `<button class="chip ${state.genre == null ? 'on' : ''}">All genres</button>` +
-    g.map(([id, n]) => `<button class="chip ${state.genre === id ? 'on' : ''}" data-id="${id}">${esc(n)}</button>`).join('');
+    g.map(([id, n]) => `<button class="chip ${state.genre === id ? 'on' : ''}" data-id="${id}">${esc(n === 'Science Fiction' ? 'Sci-Fi' : n)}</button>`).join('');
 }
 
 /* ---------- listing ---------- */
@@ -1344,6 +1353,8 @@ async function openDetail(type, id) {
   $('#findDl').addEventListener('click', () => findFor(type === 'tv' ? epState.season : null, null));
   renderOwned(key);
   if (type === 'tv') setupEpisodes(d, item, key, seasons, findFor);
+  // drawing the page dropped the selection, so on TV start on its main button (or nothing would be lit)
+  if (TV && !document.activeElement?.matches(TV_FOCUS)) tvFocus(sheet.querySelector('#findDl:not(.sm)') || $('#favBtn'));
 }
 
 /* ---------- a show's episodes: watched, downloaded, play, download ---------- */
@@ -2672,7 +2683,8 @@ function tvViewRect(sc) {
 // nothing more that way, the window scrolls instead (text and pictures have no buttons).
 function tvMove(dir) {
   const scope = tvScope(), a0 = document.activeElement;
-  const cur = a0 && a0 !== document.body && scope.contains(a0) && tvVisible(a0) ? a0 : null;
+  // (the WebView may focus a whole box that scrolls, like the film page: that counts as nothing selected)
+  const cur = a0 && a0 !== document.body && a0.matches(TV_FOCUS) && scope.contains(a0) && tvVisible(a0) ? a0 : null;
   if (!cur) return tvFocus(tvFirst());
   const sc = tvScroller(cur), view = tvViewRect(sc);
   const a = cur.getBoundingClientRect(), acx = (a.left + a.right) / 2, acy = (a.top + a.bottom) / 2;
@@ -2770,7 +2782,7 @@ if (TV) {
   document.addEventListener('focusin', (e) => { tvLastFocus = tvFocusKey(e.target); });
   new MutationObserver(() => {
     // (not in the player: there nothing is selected on purpose while the buttons are hidden)
-    if (!tvLastFocus || pdlg.open || (document.activeElement && document.activeElement !== document.body)) return;
+    if (!tvLastFocus || pdlg.open || document.activeElement?.matches(TV_FOCUS)) return;
     const el = document.querySelector(tvLastFocus);
     if (el && tvScope().contains(el) && tvVisible(el)) el.focus({ preventScroll: true });
   }).observe(document.body, { childList: true, subtree: true });
