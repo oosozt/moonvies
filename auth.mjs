@@ -95,7 +95,15 @@ export function deviceToken(userName, profileName, label) {
   return newSession(u.id, 'device', label, p.id);
 }
 export const mediaToken = (token) => sha('media:' + token).slice(0, 40);
-const cookieOut = (token) => `catalog=${token}; Path=/; Max-Age=${SESSION_DAYS * 86400}; HttpOnly; SameSite=Strict`;
+// Behind the Cloudflare tunnel every request arrives from this computer itself, with the visitor's
+// address and https in headers. Those headers are only believed from 127.0.0.1: from anywhere else
+// anyone could write them.
+export const viaTunnel = (req) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress || '');
+export const clientIp = (req) => (viaTunnel(req) && String(req.headers['cf-connecting-ip'] || '').trim()) || req.socket.remoteAddress || '';
+export const isHttps = (req) => viaTunnel(req) && (req.headers['x-forwarded-proto'] === 'https' || /"scheme":"https"/.test(req.headers['cf-visitor'] || ''));
+// the address the visitor typed, like https://moonvies.example.com or http://192.168.1.20:5178
+export const originOf = (req) => `${isHttps(req) ? 'https' : 'http'}://${req.headers.host}`;
+const cookieOut = (token, req) => `catalog=${token}; Path=/; Max-Age=${SESSION_DAYS * 86400}; HttpOnly; SameSite=Strict${req && isHttps(req) ? '; Secure' : ''}`;
 const cookieGone = 'catalog=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict';
 export const tokenOf = (req) => /(?:^|;\s*)catalog=([a-f0-9]{64})(?:;|$)/.exec(req.headers.cookie || '')?.[1] || null;
 
@@ -163,14 +171,14 @@ const meOut = (c) => ({ user: c.user, profile: c.chosen, profiles: c.profiles, c
 
 // Routes anyone may call (signing in). Returns true when it answered.
 export async function publicRoutes(req, res, path, { send, readJson, onFirstProfile, log }) {
-  const ip = req.socket.remoteAddress || '';
+  const ip = clientIp(req);
   if (path === '/api/auth/login' && req.method === 'POST') {
     if (tooMany(ip)) return send(res, 429, { error: 'Too many wrong tries. Wait 15 minutes.' }), true;
     const b = await readJson(req).catch(() => ({}));
     const u = one('SELECT * FROM users WHERE name = ?', cleanName(b.name));
     const ok = await checkPassword(b.password, u?.hash || DUMMY);
     if (!u || !ok) { failed(ip); return send(res, 403, { error: 'Wrong username or password.' }), true; }
-    res.setHeader('Set-Cookie', cookieOut(newSession(u.id, 'login', req.headers['user-agent'])));
+    res.setHeader('Set-Cookie', cookieOut(newSession(u.id, 'login', req.headers['user-agent']), req));
     log(`Signed in: ${u.name} from ${ip}`);
     return send(res, 200, { ok: true }), true;
   }
@@ -209,7 +217,7 @@ export async function publicRoutes(req, res, path, { send, readJson, onFirstProf
       log(`New account: ${name}${i.kind === 'admin' ? ' (admin)' : ''}`);
       if (i.kind === 'admin') onFirstProfile?.(firstProfile);
     }
-    res.setHeader('Set-Cookie', cookieOut(newSession(userId, 'login', req.headers['user-agent'], firstProfile)));
+    res.setHeader('Set-Cookie', cookieOut(newSession(userId, 'login', req.headers['user-agent'], firstProfile), req));
     return send(res, 200, { ok: true }), true;
   }
   if (path === '/api/auth/logout' && req.method === 'POST') {
@@ -224,7 +232,7 @@ export async function publicRoutes(req, res, path, { send, readJson, onFirstProf
     const p = pairCodes.get(String(code || '').trim());
     if (!p || p.exp < now()) { failed(ip); return send(res, 403, { error: 'That code is wrong or has expired.' }), true; }
     pairCodes.delete(String(code).trim());
-    res.setHeader('Set-Cookie', cookieOut(newSession(p.userId, 'tv', req.headers['user-agent'])));
+    res.setHeader('Set-Cookie', cookieOut(newSession(p.userId, 'tv', req.headers['user-agent']), req));
     log(`TV paired from ${ip}`);
     return send(res, 200, { ok: true }), true;
   }
@@ -280,7 +288,7 @@ export async function accountRoutes(req, res, path, ctx, { send, readJson, log }
   /* admin: accounts and invites */
   if (!path.startsWith('/api/admin/')) return false;
   if (!ctx.user.admin) return send(res, 403, { error: 'Only the admin can do this.' }), true;
-  const base = `http://${req.headers.host}`;
+  const base = originOf(req);
   if (path === '/api/admin/users' && m === 'GET') {
     const users = all('SELECT id, name, admin, created FROM users ORDER BY created').map((u) => ({
       ...u, admin: !!u.admin, profiles: profilesOf(u.id).map((p) => p.name),

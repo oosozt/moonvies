@@ -1207,7 +1207,7 @@ async function autoNext(id, n) {
 async function api(req, res, path) {
   // The page is only meant to be driven from itself: refuse other origins.
   const origin = req.headers.origin;
-  if (origin && origin !== `http://${req.headers.host}`) return send(res, 403, { error: 'forbidden' });
+  if (origin && origin !== auth.originOf(req)) return send(res, 403, { error: 'forbidden' });
 
   // who is asking (set by the request handler): their account and the profile they watch as
   const ctx = req.ctx, pid = ctx.profile.id;
@@ -1390,7 +1390,7 @@ async function api(req, res, path) {
       if (!/#EXT-X-ENDLIST/.test(text)) text = text.replace(/\s*$/, '\n#EXT-X-ENDLIST\n');
       data = Buffer.from(text);
     }
-    res.writeHead(200, { 'Content-Type': lf[3].endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp4', 'Cache-Control': lf[3].endsWith('.m3u8') ? 'no-cache' : 'max-age=3600' }).end(data);
+    res.writeHead(200, { 'Content-Type': lf[3].endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp4', 'Cache-Control': lf[3].endsWith('.m3u8') ? 'no-cache' : 'private, max-age=3600' }).end(data);
     return;
   }
   const mm = /^\/api\/media\/([a-f0-9]{40})(?:\/(video|sub|phone|thumbs)\/(\d+)(?:\.vtt|\/.*)?)?$/.exec(path);
@@ -1429,7 +1429,7 @@ async function api(req, res, path) {
     const subs = await subsOf(h.id, media);
     if (!mm[2]) {
       const t = LAN && ctx.token ? `?t=${auth.mediaToken(ctx.token)}` : '';
-      const hostUrl = `http://${req.headers.host}`;
+      const hostUrl = auth.originOf(req);
       const videos = [];
       for (const [i, v] of media.vids.entries()) {
         const info = await phoneInfo(h.id, i);
@@ -1451,7 +1451,7 @@ async function api(req, res, path) {
       if (sheet) {
         const f = join(THUMB_DIR, `${k}-${String(Number(sheet[1])).padStart(3, '0')}.jpg`);
         if (!existsSync(f)) return send(res, 404, { error: 'no such sheet' });
-        res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'max-age=86400' }).end(await readFile(f));
+        res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=86400' }).end(await readFile(f));
         return;
       }
       const info = await thumbInfo(k);
@@ -1665,6 +1665,10 @@ async function tvRoutes(req, res, path) {
 createServer(async (req, res) => {
   // The icons and the service worker hold nothing private; phones fetch them without the cookie.
   const pre = new URL(req.url, 'http://x').pathname;
+  // through the tunnel, only https: plain http would carry passwords and cookies in the clear
+  if (LAN && auth.viaTunnel(req) && req.headers['cf-connecting-ip'] && !auth.isHttps(req)) {
+    res.writeHead(301, { Location: `https://${req.headers.host}${req.url}` }).end(); return;
+  }
   if (/^\/apple-touch-icon(-precomposed)?\.png$/.test(pre) || pre === '/favicon.ico') req.url = pre === '/favicon.ico' ? '/icons/favicon-32.png' : '/icons/apple-touch-icon.png';
   try { if (await tvRoutes(req, res, pre)) return; } catch (e) { if (!res.headersSent) send(res, 500, { error: e.message }); return; }
   // The icons, the service worker and the scripts hold nothing private; the sign-in page needs some of them.
@@ -1676,6 +1680,8 @@ createServer(async (req, res) => {
     const tv = new URL(req.url, 'http://x').searchParams.get('tv') === '1';
     res.writeHead(302, { Location: tv ? '/tv' : '/login' }).end(); return;
   }
+  // what needs signing in is never kept by Cloudflare (or any cache between): it would hand it to anyone
+  res.setHeader('Cache-Control', 'private');
   let path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (path.startsWith('/api/')) {
     try { await api(req, res, path); } catch (e) { if (res.headersSent) res.destroy(); else send(res, e.status || 500, { error: e.message }); }

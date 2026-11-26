@@ -254,6 +254,39 @@ Settings you can change with environment variables:
 | `TORLINK_API_PORT` | `9161` | Port of the torlink engine (local only) |
 | `FFMPEG_DIR` | found on `PATH` | Folder with `ffmpeg` and `ffprobe` |
 
+### 8b. Reach it from anywhere (Cloudflare Tunnel, optional)
+
+To let invited people in from outside your home network without opening ports (it also works when the
+internet provider shares one public IP between customers), put the server behind a
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) on a
+domain of your own in Cloudflare:
+
+```bash
+cloudflared tunnel login                         # pick the domain in the browser
+cloudflared tunnel create moonvies
+cloudflared tunnel route dns moonvies <your domain>
+```
+
+`~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: <tunnel id>
+credentials-file: /home/<you>/.cloudflared/<tunnel id>.json
+ingress:
+  - hostname: <your domain>
+    service: http://127.0.0.1:5178
+  - service: http_status:404
+```
+
+and a second user service next to the one above, running `/usr/bin/cloudflared --no-autoupdate tunnel
+run moonvies`. The server knows a tunnel visitor by the request coming from 127.0.0.1 with Cloudflare's
+headers: it then uses the visitor's real address for the wrong-password limit, sends plain `http://` on
+to `https://`, marks the sign-in cookie Secure and makes invite links with the public address. Everything
+behind sign-in is sent `Cache-Control: private`, so Cloudflare never keeps a copy of it.
+
+Cloudflare's terms don't allow serving mostly video through its free proxy; for a few friends it's
+usually left alone, but keep it on a domain of its own so nothing else you run is affected if it isn't.
+
 ### 9. Glass Home (optional, Android TV)
 
 `tv-home/` is a small, fast home screen for Android TV sticks: a Continue watching banner from
