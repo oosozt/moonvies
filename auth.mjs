@@ -103,6 +103,10 @@ export const clientIp = (req) => (viaTunnel(req) && String(req.headers['cf-conne
 export const isHttps = (req) => viaTunnel(req) && (req.headers['x-forwarded-proto'] === 'https' || /"scheme":"https"/.test(req.headers['cf-visitor'] || ''));
 // the address the visitor typed, like https://moonvies.example.com or http://192.168.1.20:5178
 export const originOf = (req) => `${isHttps(req) ? 'https' : 'http'}://${req.headers.host}`;
+// The address for links meant for other people (invites): PUBLIC_URL when the server is on the
+// internet, so a link made at home or over Tailscale still opens for someone who has neither.
+export const PUBLIC_URL = String(process.env.PUBLIC_URL || '').trim().replace(/\/+$/, '');
+export const shareOrigin = (req) => PUBLIC_URL || originOf(req);
 const cookieOut = (token, req) => `catalog=${token}; Path=/; Max-Age=${SESSION_DAYS * 86400}; HttpOnly; SameSite=Strict${req && isHttps(req) ? '; Secure' : ''}`;
 const cookieGone = 'catalog=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict';
 export const tokenOf = (req) => /(?:^|;\s*)catalog=([a-f0-9]{64})(?:;|$)/.exec(req.headers.cookie || '')?.[1] || null;
@@ -288,7 +292,7 @@ export async function accountRoutes(req, res, path, ctx, { send, readJson, log }
   /* admin: accounts and invites */
   if (!path.startsWith('/api/admin/')) return false;
   if (!ctx.user.admin) return send(res, 403, { error: 'Only the admin can do this.' }), true;
-  const base = originOf(req);
+  const base = shareOrigin(req);
   if (path === '/api/admin/users' && m === 'GET') {
     const users = all('SELECT id, name, admin, created FROM users ORDER BY created').map((u) => ({
       ...u, admin: !!u.admin, profiles: profilesOf(u.id).map((p) => p.name),

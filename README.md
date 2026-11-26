@@ -258,6 +258,7 @@ Settings you can change with environment variables:
 | `TORLINK_STATE_DIR` | torlink's own folder | torlink's queue and history |
 | `TORLINK_API_PORT` | `9161` | Port of the torlink engine (local only) |
 | `FFMPEG_DIR` | found on `PATH` | Folder with `ffmpeg` and `ffprobe` |
+| `PUBLIC_URL` | none | The server's internet address (see 8b): invite links use it wherever they're made |
 
 ### 8b. Reach it from anywhere (Cloudflare Tunnel, optional)
 
@@ -284,7 +285,8 @@ ingress:
 ```
 
 and a second user service next to the one above, running `/usr/bin/cloudflared --no-autoupdate tunnel
-run moonvies`. The server knows a tunnel visitor by the request coming from 127.0.0.1 with Cloudflare's
+run moonvies`. Add `Environment=PUBLIC_URL=https://<your domain>` to the Moonvies service too, so invite
+links point there even when you make them at home or over Tailscale. The server knows a tunnel visitor by the request coming from 127.0.0.1 with Cloudflare's
 headers: it then uses the visitor's real address for the wrong-password limit, sends plain `http://` on
 to `https://`, marks the sign-in cookie Secure and makes invite links with the public address. Everything
 behind sign-in is sent `Cache-Control: private`, so Cloudflare never keeps a copy of it.

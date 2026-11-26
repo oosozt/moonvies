@@ -1281,7 +1281,7 @@ async function api(req, res, path) {
     // the app's link: the public address for someone on it, the home address at home
     const ip = lanAddresses().map((a) => a.address).find(isPrivate);
     const base = auth.isHttps(req) ? auth.originOf(req) : `http://${ip || req.headers.host.replace(/:\d+$/, '')}:${port}`;
-    return send(res, 200, { code, minutes: 10, apk: existsSync(APK) ? `${base}/tv.apk`.replace(/^https?:\/\//, '') : null, page: auth.originOf(req) + '/get' });
+    return send(res, 200, { code, minutes: 10, apk: existsSync(APK) ? `${base}/tv.apk`.replace(/^https?:\/\//, '') : null, page: auth.shareOrigin(req) + '/get' });
   }
   if (path === '/api/search' && req.method === 'GET') {
     const u = new URL(req.url, 'http://x');
