@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { exec, spawn, execFile } from 'node:child_process';
 import os from 'node:os';
 import { randomBytes, createHash } from 'node:crypto';
+import * as auth from './auth.mjs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const port = Number(process.env.PORT) || 5178;
@@ -108,11 +109,17 @@ try { meta = JSON.parse(await readFile(META_FILE, 'utf8')); } catch {}
 // let the page match them to their title again.
 for (const m of Object.values(meta)) if (!m.item && m.linkTried && m.title) m.linkTried = false;
 const saveMeta = () => writeFile(META_FILE, JSON.stringify(meta, null, 2)).catch(() => {});
-// Favorites live here (not in the browser) so the phone and the PC share them.
-const FAV_FILE = join(root, 'favorites.json');
-let favorites = {};
-try { favorites = JSON.parse(await readFile(FAV_FILE, 'utf8')); } catch {}
-const saveFavs = () => writeFile(FAV_FILE, JSON.stringify(favorites, null, 2)).catch(() => {});
+// Accounts, profiles, and each profile's watch progress and favorites: moonvies.db (see auth.mjs).
+auth.openDb(join(root, 'moonvies.db'));
+// Before accounts there was one shared progress.json and favorites.json: they become the admin's first profile.
+async function importOldFiles(pid) {
+  const old = async (f) => { try { return JSON.parse(await readFile(join(root, f), 'utf8')); } catch { return null; } };
+  const p = await old('progress.json'), f = await old('favorites.json');
+  if (!p && !f) return;
+  auth.importOld(pid, p, f);
+  for (const x of ['progress.json', 'favorites.json']) await rename(join(root, x), join(root, x + '.imported')).catch(() => {});
+  console.log('Moved the old watch progress and favorites into the admin\'s profile');
+}
 // A small snapshot of a TMDB title, enough to draw its card.
 function itemOf(x) {
   if (!x || !Number.isInteger(Number(x.id)) || !['movie', 'tv'].includes(x.type)) return null;
@@ -583,19 +590,8 @@ const saveSettings = () => writeFile(SETTINGS_FILE, JSON.stringify(settings, nul
 const autoSubLangs = () => (Array.isArray(settings.autoSubLangs) ? settings.autoSubLangs : ['TR', 'EN']);
 const settingsOut = () => ({ tmdbKey: settings.tmdbKey || '', subdl: !!settings.subdlKey, ffmpeg: !!FFMPEG, autoSubs: settings.autoSubs !== false, autoSubLangs: autoSubLangs(), autoNextOff: settings.autoNextOff || [], desktop: WIN });
 
-/* ---------- watch progress (shared by the phone and the PC) ---------- */
-// "<download id>:<video n>" -> { t: seconds in, d: duration, w: watched, at }
-const PROG_FILE = join(root, 'progress.json');
-let progress = {};
-try { progress = JSON.parse(await readFile(PROG_FILE, 'utf8')); } catch {}
-let progTimer;
-const saveProgress = () => { clearTimeout(progTimer); progTimer = setTimeout(() => writeFile(PROG_FILE, JSON.stringify(progress)).catch(() => {}), 800); };
-function watchOf(id) {
-  const out = {};
-  for (const [k, v] of Object.entries(progress)) if (k.startsWith(id + ':')) out[k.slice(id.length + 1)] = v;
-  return out;
-}
-function dropProgress(id) { for (const k of Object.keys(progress)) if (k.startsWith(id + ':')) delete progress[k]; saveProgress(); }
+/* ---------- watch progress: per profile, "<download id>:<video n>" -> { t: seconds in, d: duration, w: watched, at } (auth.mjs) ---------- */
+const { watchOf, dropProgress } = auth;
 // How many videos each finished download has (walking the folder once).
 const vidCount = new Map();
 async function countVids(h) {
@@ -1050,14 +1046,14 @@ setInterval(async () => {
 rm(LIVE_DIR, { recursive: true, force: true }).catch(() => {}); // leftovers from the last run
 
 // What /api/media answers for a download that's still coming.
-async function liveMedia(id, media) {
+async function liveMedia(id, media, pid) {
   const videos = [];
   for (const [i, f] of media.vids.entries()) {
     const head = await headOf(f.path), tag = (x) => x.tags || {};
     videos.push({ index: i, name: f.name, size: f.size, ext: extOf(f.name).slice(1), phone: { state: 'live' },
       audio: (head?.streams || []).filter((x) => x.codec_type === 'audio').map((x) => ({ lang: tag(x).language || '', title: tag(x).title || '', ch: x.channels || 0 })),
       vcodec: head?.streams?.find((x) => x.codec_type === 'video')?.codec_name || '', dur: Number(head?.format?.duration) || 0,
-      watch: progress[`${id}:${i}`] || null, chapters: [], external: '' });
+      watch: auth.progressGet(pid, `${id}:${i}`), chapters: [], external: '' });
   }
   const subs = await liveSubs(id, media);
   return { name: media.L.name, live: true, start: media.start, videos,
@@ -1068,6 +1064,7 @@ async function liveMedia(id, media) {
 
 /* ---------- API ---------- */
 function readJson(req) {
+  if (req.body) return Promise.resolve(req.body); // read once already (a check before the route)
   return new Promise((ok) => {
     let s = ''; req.on('data', (c) => { s += c; if (s.length > 1e6) req.destroy(); });
     req.on('end', () => { try { ok(JSON.parse(s || '{}')); } catch { ok({}); } });
@@ -1212,8 +1209,19 @@ async function api(req, res, path) {
   const origin = req.headers.origin;
   if (origin && origin !== `http://${req.headers.host}`) return send(res, 403, { error: 'forbidden' });
 
-  /* Phone → TV remote. The TV app keeps a live line open (role=tv) and does what it's told;
-     phones keep one too (role=phone) and get the TV's "now playing" to draw the remote. */
+  // who is asking (set by the request handler): their account and the profile they watch as
+  const ctx = req.ctx, pid = ctx.profile.id;
+  if (await auth.accountRoutes(req, res, path, ctx, { send, readJson, log: console.log })) return;
+  // settings that hold API keys: once set, only the admin changes them
+  if (path === '/api/settings' && req.method === 'POST' && !ctx.user.admin) {
+    const b = await readJson(req);
+    if ((typeof b.tmdbKey === 'string' && settings.tmdbKey) || (typeof b.subdlKey === 'string' && settings.subdlKey)) return send(res, 403, { error: 'Only the admin can change the API keys.' });
+    req.body = b;
+  }
+
+  /* Phone → TV remote, within one account. The TV app keeps a live line open (role=tv) and does what
+     it's told; phones keep one too (role=phone) and get the TV's "now playing" to draw the remote. */
+  const remote = remoteOf(ctx.user.id);
   if (path === '/api/remote/stream' && req.method === 'GET') {
     const role = new URL(req.url, 'http://x').searchParams.get('role') === 'tv' ? 'tv' : 'phone';
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
@@ -1250,8 +1258,7 @@ async function api(req, res, path) {
   if (path === '/api/tv/code' && req.method === 'POST') {
     // A short code to pair the TV app, shown on a device that already has access.
     if (!LAN) return send(res, 400, { error: 'Start the catalog for phones (start-phone.cmd) to use the TV app.' });
-    const code = String(100000 + (randomBytes(4).readUInt32BE() % 900000));
-    pairCodes.clear(); pairCodes.set(code, Date.now() + 10 * 60e3);
+    const code = auth.pairCode(ctx); // the TV signs into this same account
     const ip = lanAddresses().map((a) => a.address).find(isPrivate);
     return send(res, 200, { code, minutes: 10, apk: existsSync(APK) ? `http://${ip || req.headers.host.replace(/:\d+$/, '')}:${port}/tv.apk` : null });
   }
@@ -1285,7 +1292,7 @@ async function api(req, res, path) {
     for (const x of h.filter((x) => !activeIds.has(x.id)).slice(0, 200)) finished.push({
       id: x.id, name: x.name, size: x.sizeBytes, completedAt: x.completedAt,
       seeding: seeding.get(x.id)?.status || 'stopped', ...(meta[x.id] ? { title: meta[x.id].title, poster: meta[x.id].poster } : {}),
-      ...linkOf(meta[x.id]), vids: await countVids(x), watch: watchOf(x.id),
+      ...linkOf(meta[x.id]), vids: await countVids(x), watch: watchOf(pid, x.id),
     });
     return send(res, 200, { active, finished, engineError, dir: h[0]?.dir || DL_DIR, blocked: blockedLog.filter((b) => Date.now() - b.at < 24 * 3600e3) });
   }
@@ -1300,14 +1307,13 @@ async function api(req, res, path) {
     return send(res, 200, { ok: true });
   }
   if (path === '/api/favorites' && req.method === 'GET') {
-    return send(res, 200, Object.values(favorites).sort((a, b) => b.addedAt - a.addedAt));
+    return send(res, 200, auth.favoritesOf(pid));
   }
   if (path === '/api/favorite' && req.method === 'POST') {
     const b = await readJson(req), item = itemOf(b.item);
     if (!item) return send(res, 400, { error: 'bad item' });
     const key = `${item.type}:${item.id}`;
-    if (b.on) favorites[key] = { ...item, addedAt: Date.now() }; else delete favorites[key];
-    saveFavs();
+    auth.favoriteSet(pid, key, b.on ? item : null);
     return send(res, 200, { ok: true });
   }
   if (path === '/api/control' && req.method === 'POST') {
@@ -1391,7 +1397,7 @@ async function api(req, res, path) {
   if (mm && (!mm[2] || mm[2] === 'sub') && !(await history()).some((x) => x.id === mm[1])) {
     const media = await liveMediaOf(mm[1]); // still downloading: played as a stream
     if (media) {
-      if (!mm[2]) return send(res, 200, await liveMedia(mm[1], media));
+      if (!mm[2]) return send(res, 200, await liveMedia(mm[1], media, pid));
       const sub = (await liveSubs(mm[1], media))[Number(mm[3])];
       if (!sub) return send(res, 404, { error: 'no such subtitle' });
       let vtt;
@@ -1422,21 +1428,21 @@ async function api(req, res, path) {
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, { error: 'method' });
     const subs = await subsOf(h.id, media);
     if (!mm[2]) {
-      const t = LAN && token ? `?t=${token}` : '';
+      const t = LAN && ctx.token ? `?t=${auth.mediaToken(ctx.token)}` : '';
       const hostUrl = `http://${req.headers.host}`;
       const videos = [];
       for (const [i, v] of media.vids.entries()) {
         const info = await phoneInfo(h.id, i);
         videos.push({
           index: i, name: v.name, size: v.size, ext: extname(v.name).slice(1).toLowerCase(),
-          phone: await phoneState(h.id, i, v.path), audio: info?.audio?.length ? info.audio : await audioOf(v.path), vcodec: await vcodecOf(v.path), watch: progress[`${h.id}:${i}`] || null, chapters: await chaptersOf(v.path),
+          phone: await phoneState(h.id, i, v.path), audio: info?.audio?.length ? info.audio : await audioOf(v.path), vcodec: await vcodecOf(v.path), watch: auth.progressGet(pid, `${h.id}:${i}`), chapters: await chaptersOf(v.path),
           // A direct link for VLC and other players (they play the original); carries the phone token since they have no cookie.
           external: `${hostUrl}/api/media/${h.id}/video/${i}/${encodeURIComponent(v.name.split(/[\\/]/).pop())}${t}`,
         });
       }
       return send(res, 200, { name: h.name, start: media.start, videos, tv: meta[h.id]?.item?.type === 'tv' || !!parseSE(h.name) || media.vids.length > 1,
         subs: subs.map((s, i) => ({ index: i, label: s.label, lang: s.lang, video: s.video, builtin: s.builtin })),
-        subdl: !!settings.subdlKey, ffmpeg: !!FFMPEG, cast: castOf(req) });
+        subdl: !!settings.subdlKey, ffmpeg: !!FFMPEG, cast: castOf(req, ctx) });
     }
     if (mm[2] === 'thumbs') {
       const v = media.vids[n];
@@ -1496,13 +1502,13 @@ async function api(req, res, path) {
     // The player reports where it is; "watched" comes from the end of the video or by hand.
     const b = await readJson(req);
     if (!/^[a-f0-9]{40}$/.test(String(b.id)) || !Number.isInteger(b.n) || b.n < 0 || b.n > 5000) return send(res, 400, { error: 'bad id' });
-    const k = `${b.id}:${b.n}`, p = progress[k] || { t: 0, d: 0, w: false };
+    const k = `${b.id}:${b.n}`, p = auth.progressGet(pid, k) || { t: 0, d: 0, w: false };
     if (Number.isFinite(b.d) && b.d > 0) p.d = b.d;
     if (Number.isFinite(b.t) && b.t >= 0) p.t = b.t;
     if (typeof b.watched === 'boolean') { p.w = b.watched; if (!b.watched || b.t === undefined) p.t = 0; }
     else if (p.d && (p.t >= p.d * 0.92 || (p.d > 900 && p.d - p.t < 150))) p.w = true; // into the credits
     p.at = Date.now();
-    progress[k] = p; saveProgress();
+    auth.progressSet(pid, k, p);
     if (p.t > 60) autoNext(b.id, b.n); // a minute in: fetch the next episode in the background
     return send(res, 200, { ok: true, watch: p });
   }
@@ -1548,8 +1554,9 @@ async function api(req, res, path) {
     for (const x of h) {
       if (!existsSync(resolve(x.dir, x.name))) continue;
       library += x.sizeBytes || 0;
-      const n = await countVids(x), w = watchOf(x.id);
-      if (n && Object.values(w).filter((p) => p.w).length >= n)
+      // safe to clear: this profile watched it all, and nobody else is part-way through it
+      const n = await countVids(x), w = watchOf(pid, x.id);
+      if (n && Object.values(w).filter((p) => p.w).length >= n && !auth.othersWatching(pid, x.id))
         watched.push({ id: x.id, name: x.name, size: x.sizeBytes || 0, title: meta[x.id]?.title || '', ...linkOf(meta[x.id]), watchedAt: Math.max(...Object.values(w).map((p) => p.at || 0)) });
     }
     for (const f of await readdir(PHONE_DIR).catch(() => [])) phone += (await stat(join(PHONE_DIR, f)).catch(() => ({ size: 0 }))).size;
@@ -1574,26 +1581,16 @@ async function api(req, res, path) {
   send(res, 404, { error: 'not found' });
 }
 
-/* ---------- phone access (--lan) ---------- */
-// With --lan the server also listens on the network. Other devices need the
-// secret link once (it sets a cookie); this PC itself never does.
+/* ---------- who may use it ---------- */
+// With --lan the server listens on the network and everyone signs in (auth.mjs). Without it, it only
+// answers this computer, with no sign-in, as one local profile.
 const LAN = process.argv.includes('--lan');
-const TOKEN_FILE = join(root, 'lan-token.txt');
-let token = '';
-if (LAN) {
-  try { token = (await readFile(TOKEN_FILE, 'utf8')).trim(); } catch {}
-  if (!/^[a-f0-9]{24,}$/.test(token)) { token = randomBytes(16).toString('hex'); await writeFile(TOKEN_FILE, token); }
-}
-function lanAllowed(req, res) {
-  const ip = req.socket.remoteAddress || '';
-  if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return true;
-  const cookie = /(?:^|;\s*)catalog=([a-f0-9]+)/.exec(req.headers.cookie || '')?.[1];
-  const q = new URL(req.url, 'http://x').searchParams.get('t');
-  if (q && q === token) {
-    res.setHeader('Set-Cookie', `catalog=${token}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict`);
-    return true;
-  }
-  return cookie === token;
+const LOCAL_CTX = { user: { id: 0, name: 'local', admin: true }, profiles: [], chosen: null, profile: { id: 0, name: 'local', color: auth.COLORS[0] }, sessionHash: '', token: null };
+// files a player fetches without the cookie (VLC, a Chromecast): they carry ?t=<media token> instead
+const MEDIA_PATH = /^\/api\/(media\/[a-f0-9]{40}\/(video|sub)\/|live\/[a-f0-9]{40}\/[\w.-]+\/)/;
+function whoIs(req) {
+  if (!LAN) return LOCAL_CTX;
+  return auth.contextOf(req, (req.method === 'GET' || req.method === 'HEAD') && MEDIA_PATH.test(new URL(req.url, 'http://x').pathname));
 }
 function lanAddresses() {
   return Object.entries(os.networkInterfaces()).flatMap(([name, list]) => (list || [])
@@ -1604,27 +1601,31 @@ function lanAddresses() {
 // Casting: the TV fetches the video itself, with no cookie, and it can only reach the PC's
 // home-network address (not Tailscale's). Give the page that address plus the token.
 const isPrivate = (h) => /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h);
-function castOf(req) {
-  if (!LAN || !token) return null;
+function castOf(req, ctx) {
+  if (!LAN || !ctx.token) return null;
+  const t = auth.mediaToken(ctx.token);
   const host = String(req.headers.host || ''), name = host.replace(/:\d+$/, '');
-  if (isPrivate(name)) return { base: `http://${host}`, t: token };
+  if (isPrivate(name)) return { base: `http://${host}`, t };
   const ip = lanAddresses().map((a) => a.address).find(isPrivate);
-  return ip ? { base: `http://${ip}:${port}`, t: token } : null;
+  return ip ? { base: `http://${ip}:${port}`, t } : null;
 }
 
-const remote = { tvs: new Set(), phones: new Set(), status: null };
+// the phone → TV remote, one per account: a phone only reaches TVs signed into the same account
+const remotes = new Map();
+function remoteOf(userId) {
+  if (!remotes.has(userId)) remotes.set(userId, { tvs: new Set(), phones: new Set(), status: null });
+  return remotes.get(userId);
+}
 function remoteTell(list, event, data) {
   const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const r of list) { try { r.write(msg); } catch {} }
 }
 // a comment line now and then keeps the live lines from being dropped as idle
-setInterval(() => { for (const r of [...remote.tvs, ...remote.phones]) { try { r.write(': ping\n\n'); } catch {} } }, 25000);
+setInterval(() => { for (const remote of remotes.values()) for (const r of [...remote.tvs, ...remote.phones]) { try { r.write(': ping\n\n'); } catch {} } }, 25000);
 
-/* TV app: it finds the PC by asking every address on the home network for /api/tv/hello,
-   then pairs once with a 6-digit code from a device that already has access (which sets the cookie). */
+/* TV app: it finds the server by asking every address on the home network for /api/tv/hello,
+   then pairs once with a 6-digit code from a signed-in device, which signs the TV into that account. */
 const APK = join(root, 'tv-app', 'movie-catalog-tv.apk');
-const pairCodes = new Map(); // code -> expires
-let pairFails = [];
 async function tvRoutes(req, res, path) {
   if (path === '/api/tv/hello') {
     // alt: the PC's Tailscale addresses, which the TV app tries when it's away from the home Wi-Fi
@@ -1640,7 +1641,7 @@ async function tvRoutes(req, res, path) {
     return true;
   }
   if (path === '/tv' && req.method === 'GET') {
-    if (!LAN || lanAllowed(req, res)) {
+    if (whoIs(req)) {
       // the home screen's Resume: the episode to start comes along (play=<download id>&n=<video>&title=...)
       const q = new URL(req.url, 'http://x').searchParams, play = q.get('play');
       const extra = play && /^[a-f0-9]{40}$/.test(play) ? '&' + new URLSearchParams({ play, n: String(Number(q.get('n')) || 0), title: (q.get('title') || '').slice(0, 200) }) : '';
@@ -1650,17 +1651,13 @@ async function tvRoutes(req, res, path) {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }).end(data);
     return true;
   }
-  if (path === '/api/tv/pair' && req.method === 'POST') {
-    const now = Date.now();
-    pairFails = pairFails.filter((t) => now - t < 10 * 60e3);
-    if (pairFails.length >= 10) return send(res, 429, { error: 'Too many wrong codes. Wait 10 minutes.' }), true;
-    const { code } = await readJson(req).catch(() => ({}));
-    const exp = pairCodes.get(String(code || '').trim());
-    if (!exp || exp < now) { pairFails.push(now); return send(res, 403, { error: 'That code is wrong or has expired.' }), true; }
-    pairCodes.clear();
-    res.setHeader('Set-Cookie', `catalog=${token}; Path=/; Max-Age=315360000; HttpOnly; SameSite=Strict`);
-    console.log(`TV paired from ${req.socket.remoteAddress}`);
-    return send(res, 200, { ok: true }), true;
+  // signing in, invites, TV pairing: open to anyone (auth.mjs limits wrong guesses)
+  if (LAN && await auth.publicRoutes(req, res, path, { send, readJson, log: console.log, onFirstProfile: (pid) => importOldFiles(pid).catch((e) => console.log(`Import failed: ${e.message}`)) })) return true;
+  if (path === '/login' || path === '/login.html') {
+    if (!LAN) { res.writeHead(302, { Location: '/' }).end(); return true; }
+    const data = await readFile(join(root, 'login.html'));
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }).end(data);
+    return true;
   }
   return false;
 }
@@ -1670,17 +1667,23 @@ createServer(async (req, res) => {
   const pre = new URL(req.url, 'http://x').pathname;
   if (/^\/apple-touch-icon(-precomposed)?\.png$/.test(pre) || pre === '/favicon.ico') req.url = pre === '/favicon.ico' ? '/icons/favicon-32.png' : '/icons/apple-touch-icon.png';
   try { if (await tvRoutes(req, res, pre)) return; } catch (e) { if (!res.headersSent) send(res, 500, { error: e.message }); return; }
-  const open = new URL(req.url, 'http://x').pathname.startsWith('/icons/') || pre === '/sw.js';
-  if (LAN && !open && !lanAllowed(req, res)) { res.writeHead(403, { 'Content-Type': 'text/plain' }).end('Open the link with ?t=... printed by the catalog server.'); return; }
+  // The icons, the service worker and the scripts hold nothing private; the sign-in page needs some of them.
+  const open = pre.startsWith('/icons/') || pre === '/sw.js' || pre === '/hls.min.js' || pre === '/manifest.webmanifest';
+  req.ctx = open ? null : whoIs(req);
+  if (!open && !req.ctx) {
+    if (pre.startsWith('/api/')) { send(res, 401, { error: 'Signed out. Reload the page to sign in again.' }); return; }
+    // a page: sign in first (the TV app gets its pairing screen at /tv)
+    const tv = new URL(req.url, 'http://x').searchParams.get('tv') === '1';
+    res.writeHead(302, { Location: tv ? '/tv' : '/login' }).end(); return;
+  }
   let path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (path.startsWith('/api/')) {
     try { await api(req, res, path); } catch (e) { if (res.headersSent) res.destroy(); else send(res, e.status || 500, { error: e.message }); }
     return;
   }
   if (path === '/manifest.webmanifest') {
-    // Built per request: on the network, the home-screen app opens with the secret link,
-    // since an iPhone gives it its own cookies.
-    const start = LAN && token ? `/?t=${token}` : '/';
+    // (an iPhone's home-screen app has its own cookies, so it asks to sign in once)
+    const start = '/';
     res.writeHead(200, { 'Content-Type': 'application/manifest+json', 'Cache-Control': 'no-cache' }).end(JSON.stringify({
       name: 'Moonvies', short_name: 'Moonvies', id: '/', start_url: start, scope: '/', display: 'standalone',
       background_color: '#0a0520', theme_color: '#0a0520', orientation: 'any',
@@ -1703,17 +1706,15 @@ createServer(async (req, res) => {
   const url = `http://localhost:${port}/`;
   console.log(`Moonvies running at ${url}  (Ctrl+C to stop)`);
   if (LAN) {
-    for (const a of lanAddresses()) console.log(`  phone (${a.name}): http://${a.address}:${port}/?t=${token}`);
-    // Tailscale: also print the MagicDNS name, which keeps working if the address changes.
-    const ts = ['C:\\Program Files\\Tailscale\\tailscale.exe', 'tailscale'].find((p) => p === 'tailscale' || existsSync(p));
-    execFile(ts, ['status', '--json'], { windowsHide: true, timeout: 5000 }, (err, out) => {
-      try {
-        const self = JSON.parse(out).Self;
-        const host = self.DNSName.replace(/\.$/, '');
-        console.log(`  phone (Tailscale, works anywhere): http://${host.split('.')[0]}:${port}/?t=${token}`);
-        console.log(`                                  or http://${host}:${port}/?t=${token}`);
-      } catch {}
-    });
+    for (const a of lanAddresses()) console.log(`  on the network (${a.name}): http://${a.address}:${port}/`);
+    // No accounts yet: a one-time link that makes the admin account (also saved to setup-link.txt).
+    const setup = auth.setupLink();
+    if (setup) {
+      const ip = lanAddresses().map((a) => a.address).find(isPrivate) || 'localhost';
+      const link = `http://${ip}:${port}/login?invite=${setup}`;
+      console.log(`  No accounts yet. Make the admin account here (works once, for 30 days): ${link}`);
+      writeFile(join(root, 'setup-link.txt'), link + '\n').catch(() => {});
+    } else rm(join(root, 'setup-link.txt'), { force: true }).catch(() => {});
   }
   if (!CLI) console.log('torlink CLI not found in the global npm folder; falling back to torlnk.cmd');
   ensureServe().catch((e) => console.log(e.message));

@@ -136,27 +136,36 @@ It opens <http://localhost:5178>. Paste the TMDB key and you're in.
 node server.mjs --lan
 ```
 
-On Windows you can double-click `start-phone.cmd` instead. The server prints a few links like this:
+On Windows you can double-click `start-phone.cmd` instead. The server prints its addresses, and the
+very first time a one-time link to make the admin account:
 
 ```
 Moonvies running at http://localhost:5178/
-  phone (Wi-Fi): http://192.168.1.20:5178/?t=4f3a...
-  phone (Tailscale, works anywhere): http://my-pc:5178/?t=4f3a...
+  on the network (Wi-Fi): http://192.168.1.20:5178/
+  No accounts yet. Make the admin account here (works once, for 30 days): http://192.168.1.20:5178/login?invite=...
 ```
 
-### 6. Log in from a phone
+(The link is also saved in `setup-link.txt` until the admin account exists.)
 
-Moonvies has no accounts. Instead, the server makes one secret token (saved in `lan-token.txt`), and
-the links above carry it as `?t=...`.
+### 6. Accounts and signing in
 
-1. Open one of those links on the phone, once. It sets a cookie, and from then on the plain address
-   (`http://192.168.1.20:5178`) works on that phone.
-2. On iPhone, use **Share → Add to Home Screen** for an app icon; on Android, **Install app** in the
-   browser menu.
-3. Anyone with the link can use your catalog, so share it only with people in your home. To shut
-   everyone out, delete `lan-token.txt` and restart: a new token is made and old links stop working.
+With `--lan`, everyone signs in. Accounts live in `moonvies.db` (SQLite, built into Node 22.13+):
 
-The PC the server runs on never needs the token (`localhost` is always allowed).
+- **The admin** (the first account, made with the link above) is the only one who adds people. In the
+  app, press your avatar (top right) → **People** → **Make invite link**, and send the link to that
+  person. They pick their own username and password. Nobody can sign up without an invite.
+- **Profiles:** each account can have up to 6 profiles ("Who's watching?"), each with its own watch
+  progress, "Continue watching" and favorites. Downloads are shared by everyone, and anyone can
+  download or delete.
+- **Forgotten password:** the admin presses **Password link** next to that person and sends it to
+  them (it works once, for 2 days). The admin can also sign someone out everywhere or remove them.
+- Passwords are stored as scrypt hashes, sign-ins as hashed random tokens in an HttpOnly cookie;
+  10 wrong tries from one address lock it out for 15 minutes.
+
+On iPhone, use **Share → Add to Home Screen** for an app icon (it asks to sign in once more, since
+home-screen apps have their own cookies); on Android, **Install app** in the browser menu.
+
+Without `--lan` the server only answers its own computer, with no sign-in.
 
 **Away from home:** install [Tailscale](https://tailscale.com) on the server and the phone, sign both
 into the same account, and use the Tailscale link. Nothing is opened to the internet.
@@ -255,7 +264,7 @@ app to add it to the dock, move it or remove it.
 powershell -File tv-home\build.ps1
 adb install -r tv-home\glass-home.apk
 # tell it where Moonvies is (once):
-adb shell am start -n com.oosozt.glasshome/.HomeActivity --es server http://<server-lan-ip>:5178 --es alt http://<server-tailscale-ip>:5178 --es token <contents of lan-token.txt>
+adb shell am start -n com.oosozt.glasshome/.HomeActivity --es server http://<server-lan-ip>:5178 --es alt http://<server-tailscale-ip>:5178 --es token $(ssh <server> "cd <app folder> && node device-token.mjs <username> <profile>")
 # make it the Home screen:
 adb shell cmd package set-home-activity com.oosozt.glasshome/.HomeActivity
 ```
@@ -267,8 +276,7 @@ Android 9 it rolls back **every** system app, including the web engine and Googl
 ## Files the server writes
 
 All in the app folder, all ignored by git: `settings.json` (TMDB and SubDL keys, preferences),
-`lan-token.txt` (the phone link token), `progress.json` (where you are in each video),
-`favorites.json`, `downloads.json` (which title each download belongs to), `phone/` (phone copies)
+`moonvies.db` (accounts, profiles, each profile's watch progress and favorites), `downloads.json` (which title each download belongs to), `phone/` (phone copies)
 and `thumbs/` (seek previews).
 
 ## Troubleshooting

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0520">
+<link rel="icon" href="/icons/favicon-32.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<title>Moonvies · Sign in</title>
+<style>
+  :root { --bg: #0a0520; --panel: #140a30; --text: #dff8ff; --muted: #9d97cf; --cyan: #3df2ff; --pink: #ff2e88; --pink-soft: #ff8ad1; --bad: #ff5c7a;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace; --cut: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px)); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: 16px/1.5 var(--mono); }
+  body { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px;
+    background: radial-gradient(ellipse at 50% 120%, #ff2e8840, transparent 60%), radial-gradient(ellipse at 50% -20%, #3df2ff25, transparent 60%), var(--bg); }
+  .box { width: min(400px, 100%); }
+  .brand { font: 800 34px var(--mono); letter-spacing: .08em; text-align: center; color: #fff; margin-bottom: 4px; text-shadow: 0 0 18px #3df2ff66; }
+  .brand span { color: var(--pink); text-shadow: 0 0 18px #ff2e8899; }
+  h1 { margin: 0 0 6px; font-size: 15px; letter-spacing: .2em; text-transform: uppercase; color: var(--pink-soft); text-align: center; font-weight: 700; }
+  p.lead { color: var(--muted); margin: 0 0 22px; text-align: center; font-size: 14px; }
+  label { display: block; margin: 0 0 14px; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+  input { display: block; width: 100%; margin-top: 6px; font: 17px var(--mono); padding: 12px 14px; color: #fff;
+    background: var(--panel); border: 2px solid #3df2ff66; outline: none; clip-path: var(--cut); border-radius: 0; }
+  input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px #3df2ff33; }
+  button { width: 100%; margin-top: 8px; padding: 14px; font: 700 16px var(--mono); letter-spacing: .14em; text-transform: uppercase;
+    color: #fff; background: var(--pink); border: 0; clip-path: var(--cut); cursor: pointer; }
+  button:focus-visible { outline: none; box-shadow: inset 0 0 0 3px #fff; }
+  button[disabled] { opacity: .6; cursor: default; }
+  .err { min-height: 24px; margin-top: 14px; color: var(--bad); text-align: center; font-size: 14px; }
+  .note { margin-top: 18px; color: var(--muted); font-size: 13px; text-align: center; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="brand">Moon<span>vies</span></div>
+  <h1 id="title">Sign in</h1>
+  <p class="lead" id="lead">Sign in with the account the admin made for you.</p>
+  <form id="f" autocomplete="on">
+    <label id="nameRow">Username <input id="name" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="32"></label>
+    <label>Password <input id="pw" name="password" type="password" autocomplete="current-password" required maxlength="200"></label>
+    <label id="pw2Row" hidden>Password again <input id="pw2" type="password" autocomplete="new-password" maxlength="200"></label>
+    <label id="profRow" hidden>Your profile's name <input id="prof" maxlength="24" placeholder="Shown on “Who's watching?”"></label>
+    <button id="go">Sign in</button>
+  </form>
+  <div class="err" id="err"></div>
+  <div class="note" id="note">No account? Moonvies is invite-only: ask the admin for a link.</div>
+</div>
+<script>
+  const $ = (s) => document.querySelector(s);
+  const code = new URLSearchParams(location.search).get('invite');
+  let mode = 'login';
+  const post = async (path, body) => {
+    const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || 'Something went wrong (' + r.status + ')');
+    return j;
+  };
+  async function readInvite() {
+    try {
+      const r = await fetch('/api/auth/invite?c=' + encodeURIComponent(code));
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error);
+      mode = j.kind;
+      $('#pw').autocomplete = 'new-password';
+      $('#pw2Row').hidden = false; $('#pw2').required = true;
+      $('#note').hidden = true;
+      if (j.kind === 'reset') {
+        $('#title').textContent = 'New password';
+        $('#lead').textContent = 'Choose a new password for ' + j.name + '. Other devices on this account will be signed out.';
+        $('#name').value = j.name; $('#name').readOnly = true; $('#nameRow').hidden = true;
+        $('#go').textContent = 'Save and sign in';
+        $('#pw').focus();
+      } else {
+        $('#title').textContent = j.kind === 'admin' ? 'Make the admin account' : "You're invited";
+        $('#lead').textContent = j.kind === 'admin'
+          ? 'This first account manages everyone else: invites, password resets, removing accounts.'
+          : 'Pick a username and password. You can add more profiles (for family) after.';
+        $('#profRow').hidden = false;
+        if (j.note) $('#prof').value = j.note;
+        $('#go').textContent = 'Create account';
+        $('#name').focus();
+      }
+    } catch (e) {
+      $('#err').textContent = e.message;
+      history.replaceState(null, '', '/login');
+    }
+  }
+  if (code) readInvite(); else $('#name').focus();
+  $('#f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('#err'), go = $('#go');
+    err.textContent = '';
+    if (mode !== 'login' && $('#pw').value !== $('#pw2').value) { err.textContent = "The two passwords don't match."; return; }
+    go.disabled = true;
+    try {
+      if (mode === 'login') await post('/api/auth/login', { name: $('#name').value.trim(), password: $('#pw').value });
+      else await post('/api/auth/invite', { c: code, name: $('#name').value.trim(), password: $('#pw').value, profile: $('#prof').value.trim() });
+      location.replace('/');
+    } catch (x) { err.textContent = x.message; go.disabled = false; }
+  });
+</script>
+</body>
+</html>

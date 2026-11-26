@@ -394,6 +394,35 @@
   /* TV app panel in the drawer */
   .tvapp { padding: 10px 18px; border-bottom: 1px dashed #3df2ff44; font-size: 13px; }
   .tvapp p { margin: 10px 0 6px; } .tvapp ol { margin: 4px 0 10px; padding-left: 20px; } .tvapp li { margin-bottom: 6px; }
+  /* ---------- accounts and profiles ---------- */
+  .av { --c: var(--cyan); display: inline-grid; place-items: center; width: 26px; height: 26px; background: var(--c); color: #0a0520;
+    font: 900 13px/1 var(--display); clip-path: var(--cut-sm); flex: none; }
+  .av.big { width: 104px; height: 104px; font-size: 44px; clip-path: var(--cut-lg); }
+  .av.mid { width: 52px; height: 52px; font-size: 22px; clip-path: var(--cut); }
+  #meBtn { padding: 4px; }
+  .who { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 60; display: grid; place-items: center; text-align: center; padding: 24px 16px; overflow: auto;
+    background: radial-gradient(ellipse at 50% 120%, #ff2e8833, transparent 60%), radial-gradient(ellipse at 50% -20%, #3df2ff22, transparent 60%), var(--bg); }
+  .who h1 { font: 700 24px var(--display); letter-spacing: .14em; text-transform: uppercase; color: var(--pink-soft); text-shadow: 0 0 18px #ff2e8888; margin: 0 0 30px; }
+  .who .list { display: flex; flex-wrap: wrap; gap: 26px; justify-content: center; }
+  .who button, .prof { background: none; border: 0; color: var(--muted); font: 15px var(--mono); cursor: pointer; padding: 8px; display: grid; gap: 10px; justify-items: center; outline: none; }
+  .who button:hover, .who button:focus, .prof:hover, .prof:focus-visible { color: #fff; filter: drop-shadow(0 0 14px var(--cyan)); }
+  .who button:focus .av, .who button:hover .av { transform: scale(1.06); }
+  .acct h2 { font: 700 16px var(--display); letter-spacing: .1em; text-transform: uppercase; color: #fff; margin: 4px 0 12px; }
+  .acct h3 { font: 700 12px var(--display); letter-spacing: .18em; text-transform: uppercase; color: var(--amber); margin: 26px 0 10px; }
+  .acct .profs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .prof.on { color: #fff; } .prof.on .av { box-shadow: inset 0 0 0 3px #fff; }
+  .acct .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
+  .acct .muted { font-size: 13px; }
+  .acct input[type=text], .acct input[type=password] { flex: 1 1 200px; min-width: 0; padding: 10px 12px; background: var(--panel-2); border: 1px solid #3df2ff66; color: #fff; font: 15px var(--mono); border-radius: 0; outline: none; }
+  .acct input:focus { border-color: var(--cyan); }
+  .acct .swatch { width: 30px; height: 30px; border: 0; background: var(--c); cursor: pointer; clip-path: var(--cut-sm); }
+  .acct .swatch.on { box-shadow: inset 0 0 0 3px #fff; }
+  .acct .form { border: 1px solid #3df2ff44; padding: 12px; margin: 10px 0; clip-path: var(--cut); background: #0a052099; }
+  .urow { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 10px 0; border-top: 1px dashed #3df2ff33; }
+  .urow .ln { flex: 1 1 180px; min-width: 0; }
+  .urow .ln b { color: #fff; } .urow .ln span { display: block; color: var(--muted); font-size: 12.5px; }
+  .linkbox { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+  .linkbox input { font-size: 13px !important; }
   .tvcode { font: 700 22px var(--display); letter-spacing: .18em; color: var(--pink); text-shadow: 0 0 10px #ff2e8888; margin-left: 8px; }
   .tvurl { color: var(--cyan); word-break: break-all; user-select: all; }
   body.tv .tvapp { display: none; }
@@ -600,6 +629,7 @@
       <button class="iconbtn showable" id="toTop" title="Search and filters">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
       </button>
+      <button class="iconbtn" id="meBtn" title="Profile and account" hidden></button>
       <button class="iconbtn hideable" id="settings" title="Change API key">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.6 7.6a5.5 5.5 0 1 1-7.8 7.8 5.5 5.5 0 0 1 7.8-7.8zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
       </button>
@@ -632,6 +662,7 @@
 </div></dialog>
 
 <dialog id="dlg"><div class="sheet" id="sheet"></div></dialog>
+<div class="who" id="who" hidden><div><h1>Who's watching?</h1><div class="list" id="whoList"></div></div></div>
 <div class="toast" id="toast"></div>
 <div class="tvbar" id="tvbar" hidden>
   <div class="tvb-art"></div>
@@ -1458,6 +1489,7 @@ const fmtBytes = (n) => { if (!n) return '—'; const u = ['B', 'KB', 'MB', 'GB'
 const fmtEta = (s) => { if (!isFinite(s) || s <= 0) return ''; if (s < 60) return Math.ceil(s) + 's'; if (s < 3600) return Math.ceil(s / 60) + 'm'; return Math.floor(s / 3600) + 'h ' + Math.round((s % 3600) / 60) + 'm'; };
 async function local(path, body) {
   const r = await fetch(path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+  if (r.status === 401) { location.href = TV ? '/tv' : '/login'; throw new Error('Signed out'); } // signed out (or the account was removed)
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || 'Request failed (' + r.status + ')');
   return j;
@@ -2591,6 +2623,7 @@ function toast(msg, ms = 2200) { const t = $('#toast'); t.textContent = msg; t.c
 function tvScope() {
   // in the player, an open panel (episodes, subtitle settings) holds the arrows until it's closed:
   // it lies over the buttons, which would otherwise be picked through it
+  if (!$('#who').hidden) return $('#who');
   if (pdlg.open) return pdlg.querySelector('.pstrip:not([hidden]), .psubfind:not([hidden])') || pdlg;
   return dlg.open ? dlg : drawer.classList.contains('open') ? drawer : $('#app');
 }
@@ -3020,6 +3053,167 @@ $('#tvBtn').addEventListener('click', async () => {
   $('#tvNew').onclick = () => { box.hidden = true; $('#tvBtn').click(); };
 });
 
+/* ---------- accounts and profiles ---------- */
+// ME: { user: {id, name, admin}, profile (the one this device watches as, or null), profiles, colors }.
+// Without sign-in (the server on this computer only) there are no profiles and all this stays hidden.
+let ME = null;
+const avatar = (p, size = '') => `<span class="av ${size}" style="--c:${esc(p.color)}">${esc((p.name || '?').trim().slice(0, 1).toUpperCase())}</span>`;
+async function loadMe() {
+  ME = await local('/api/me').catch(() => null);
+  const b = $('#meBtn'), p = ME?.profile || ME?.profiles?.[0];
+  b.hidden = !p;
+  if (p) { b.innerHTML = avatar(p); b.title = `${p.name} · ${ME.user.name}`; }
+  return ME;
+}
+// "Who's watching?": resolves once a profile is picked.
+function whoIsWatching() {
+  return new Promise((done) => {
+    const box = $('#who');
+    $('#whoList').innerHTML = ME.profiles.map((p) => `<button data-p="${p.id}">${avatar(p, 'big')}<span>${esc(p.name)}</span></button>`).join('');
+    box.hidden = false;
+    const first = box.querySelector(`[data-p="${ME.profile?.id}"]`) || box.querySelector('button');
+    if (TV) tvFocus(first); else first.focus({ preventScroll: true });
+    box.onclick = async (e) => {
+      const b = e.target.closest('button[data-p]'); if (!b) return;
+      await local('/api/me/profile', { id: Number(b.dataset.p) }).catch((err) => toast(err.message));
+      try { sessionStorage.setItem('moonvies.picked', '1'); } catch {}
+      box.hidden = true; box.onclick = null;
+      done();
+    };
+  });
+}
+async function switchProfile(id) {
+  await local('/api/me/profile', { id });
+  try { sessionStorage.setItem('moonvies.picked', '1'); } catch {}
+  location.reload(); // favorites, progress and "continue watching" all belong to the profile
+}
+
+function copyLink(input) {
+  input.select(); input.setSelectionRange(0, 9999);
+  const ok = () => toast('Link copied');
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(input.value).then(ok, () => { document.execCommand('copy'); ok(); });
+  else { try { document.execCommand('copy') ? ok() : toast('Select the link and copy it'); } catch { toast('Select the link and copy it'); } }
+}
+const linkBox = (link, days) => `<div class="linkbox"><input type="text" readonly value="${esc(link)}"><button class="btn sm" data-x="copy">Copy</button>${navigator.share ? '<button class="btn ghost sm" data-x="share">Share</button>' : ''}</div>
+  <p class="muted">Works once, for ${days} day${days > 1 ? 's' : ''}. Send it only to that person.</p>`;
+const ago = (t) => { if (!t) return 'never'; const m = Math.round((Date.now() - t) / 60e3); return m < 2 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' days ago'; };
+
+async function openAccount() {
+  await loadMe();
+  if (!ME?.profiles?.length) return;
+  const sheet = $('#sheet');
+  const cur = ME.profile || ME.profiles[0];
+  sheet.innerHTML = `<button class="close" onclick="dlg.close()">✕</button><div class="body acct">
+    <h2>Who's watching</h2>
+    <div class="profs">${ME.profiles.map((p) => `<button class="prof ${p.id === cur.id ? 'on' : ''}" data-x="switch" data-p="${p.id}">${avatar(p, 'mid')}<span>${esc(p.name)}</span></button>`).join('')}</div>
+    <div class="row">
+      ${ME.profiles.length < 6 ? '<button class="btn ghost sm" data-x="addProf">+ Add profile</button>' : ''}
+      <button class="btn ghost sm" data-x="editProf">Edit ${esc(cur.name)}</button>
+    </div>
+    <div id="profForm"></div>
+    <h3>Account</h3>
+    <p class="muted">Signed in as <b style="color:#fff">${esc(ME.user.name)}</b>${ME.user.admin ? ' · admin' : ''}. Watch progress and favorites belong to each profile.</p>
+    <div class="row">
+      <button class="btn ghost sm" data-x="pwForm">Change password</button>
+      <button class="btn ghost sm" data-x="others">Sign out other devices</button>
+      <button class="btn ghost sm" data-x="logout">Sign out</button>
+    </div>
+    <div id="pwBox"></div>
+    ${ME.user.admin ? `<h3>People</h3>
+      <p class="muted">Only you can add people. Make an invite link and send it to them: they choose their own username and password.</p>
+      <div class="row"><input type="text" id="invNote" maxlength="60" placeholder="Who is it for? (optional)"><button class="btn sm" data-x="invite">Make invite link</button></div>
+      <div id="invOut"></div>
+      <div id="people"><p class="muted">Loading…</p></div>` : ''}
+  </div>`;
+  if (!dlg.open) { dlg.showModal(); pushLayer(); }
+  if (ME.user.admin) loadPeople();
+  if (TV) tvFocus(sheet.querySelector('.prof.on'));
+}
+async function loadPeople() {
+  const box = $('#people'); if (!box) return;
+  let r;
+  try { r = await local('/api/admin/users'); } catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  box.innerHTML = r.users.map((u) => `<div class="urow" data-u="${u.id}"><div class="ln"><b>${esc(u.name)}</b>${u.admin ? ' <span class="muted" style="display:inline">· admin</span>' : ''}
+      <span>${u.profiles.map(esc).join(', ') || 'no profiles'} · ${u.devices} device${u.devices === 1 ? '' : 's'} · active ${ago(u.seen)}</span></div>
+      <button class="btn ghost sm" data-x="reset">Password link</button>
+      ${u.id !== ME.user.id ? `<button class="btn ghost sm" data-x="kick">Sign out</button><button class="btn ghost sm danger" data-x="del">Remove</button>` : ''}
+    </div><div class="resetOut" data-u="${u.id}"></div>`).join('')
+    + (r.invites.length ? `<h3>Invites not used yet</h3>` + r.invites.map((i) => `<div class="urow" data-i="${i.id}"><div class="ln"><b>${esc(i.kind === 'reset' ? 'New password for ' + (i.user || '?') : i.note || 'Invite')}</b><span>expires ${new Date(i.expires).toLocaleDateString()}</span></div>
+      <button class="btn ghost sm" data-x="cancelInv">Cancel</button></div>`).join('') : '');
+}
+function profileForm(p) {
+  const colors = ME.colors;
+  let color = p?.color || colors.find((c) => !ME.profiles.some((x) => x.color === c)) || colors[0];
+  const box = $('#profForm');
+  box.innerHTML = `<div class="form"><div class="row"><input type="text" id="pfName" maxlength="24" placeholder="Name" value="${esc(p?.name || '')}"></div>
+    <div class="row">${colors.map((c) => `<button class="swatch ${c === color ? 'on' : ''}" style="--c:${c}" data-x="color" data-c="${c}" aria-label="Colour"></button>`).join('')}</div>
+    <div class="row"><button class="btn sm" data-x="saveProf" data-p="${p?.id || ''}">${p ? 'Save' : 'Add'}</button>
+      ${p && ME.profiles.length > 1 ? `<button class="btn ghost sm danger" data-x="delProf" data-p="${p.id}">Delete profile</button>` : ''}
+      <button class="btn ghost sm" data-x="closeForm">Cancel</button></div>
+    ${p && ME.profiles.length > 1 ? '<p class="muted">Deleting a profile removes its watch progress and favorites.</p>' : ''}</div>`;
+  box.dataset.color = color;
+  $('#pfName').focus();
+}
+$('#meBtn').addEventListener('click', () => openAccount());
+$('#sheet').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-x]'); if (!b || !b.closest('.acct')) return;
+  const x = b.dataset.x, row = b.closest('[data-u]'), uid = row && Number(row.dataset.u);
+  const run = async (fn) => { b.disabled = true; try { await fn(); } catch (err) { toast(err.message, 4000); } finally { b.disabled = false; } };
+  if (x === 'switch') { const id = Number(b.dataset.p); if (id !== (ME.profile || ME.profiles[0]).id) run(() => switchProfile(id)); return; }
+  if (x === 'addProf') return profileForm(null);
+  if (x === 'editProf') return profileForm(ME.profile || ME.profiles[0]);
+  if (x === 'closeForm') { $('#profForm').innerHTML = ''; return; }
+  if (x === 'color') { $('#profForm').dataset.color = b.dataset.c; $('#profForm').querySelectorAll('.swatch').forEach((s) => s.classList.toggle('on', s === b)); return; }
+  if (x === 'saveProf') return run(async () => {
+    const name = $('#pfName').value.trim(), color = $('#profForm').dataset.color;
+    if (!name) { toast('Give the profile a name'); return; }
+    if (b.dataset.p) await local('/api/profiles/' + b.dataset.p, { name, color });
+    else { const r = await local('/api/profiles', { name }); await local('/api/profiles/' + r.id, { color }); }
+    openAccount(); // redraws with the change (and the header avatar)
+  });
+  if (x === 'delProf') {
+    if (!confirm('Delete this profile and its watch progress and favorites?')) return;
+    return run(async () => { await local('/api/profiles/' + b.dataset.p, { delete: true }); location.reload(); });
+  }
+  if (x === 'pwForm') {
+    $('#pwBox').innerHTML = `<div class="form"><div class="row"><input type="password" id="pwOld" placeholder="Current password" autocomplete="current-password"></div>
+      <div class="row"><input type="password" id="pwNew" placeholder="New password (6+ characters)" autocomplete="new-password"></div>
+      <div class="row"><input type="password" id="pwNew2" placeholder="New password again" autocomplete="new-password"></div>
+      <div class="row"><button class="btn sm" data-x="pwSave">Change password</button><button class="btn ghost sm" data-x="pwCancel">Cancel</button></div>
+      <p class="muted">Your other devices will be signed out.</p></div>`;
+    $('#pwOld').focus(); return;
+  }
+  if (x === 'pwCancel') { $('#pwBox').innerHTML = ''; return; }
+  if (x === 'pwSave') return run(async () => {
+    if ($('#pwNew').value !== $('#pwNew2').value) { toast("The new passwords don't match"); return; }
+    await local('/api/me/password', { old: $('#pwOld').value, password: $('#pwNew').value });
+    $('#pwBox').innerHTML = ''; toast('Password changed. Other devices are signed out.', 3500);
+  });
+  if (x === 'others') return run(async () => { await local('/api/me/signout-others', {}); toast('Your other devices are signed out'); if (ME.user.admin) loadPeople(); });
+  if (x === 'logout') {
+    if (!confirm('Sign out on this device?')) return;
+    return run(async () => { await local('/api/auth/logout', {}); try { sessionStorage.clear(); } catch {} location.href = TV ? '/tv' : '/login'; });
+  }
+  if (x === 'invite') return run(async () => {
+    const r = await local('/api/admin/invite', { note: $('#invNote').value.trim() });
+    $('#invOut').innerHTML = linkBox(r.link, r.days); $('#invNote').value = '';
+    loadPeople();
+  });
+  if (x === 'copy') return copyLink(b.parentElement.querySelector('input'));
+  if (x === 'share') { navigator.share({ title: 'Moonvies', url: b.parentElement.querySelector('input').value }).catch(() => {}); return; }
+  if (x === 'reset') return run(async () => {
+    const r = await local(`/api/admin/users/${uid}/reset`, {});
+    $(`.resetOut[data-u="${uid}"]`).innerHTML = `<p class="muted">Send this to them to choose a new password:</p>` + linkBox(r.link, r.days);
+  });
+  if (x === 'kick') return run(async () => { await local(`/api/admin/users/${uid}/signout`, {}); toast('Signed out everywhere'); loadPeople(); });
+  if (x === 'del') {
+    const name = row.querySelector('b').textContent;
+    if (!confirm(`Remove ${name}'s account, with all its profiles, watch progress and favorites? Downloads stay.`)) return;
+    return run(async () => { await local(`/api/admin/users/${uid}/delete`, {}); toast(`${name} removed`); loadPeople(); });
+  }
+  if (x === 'cancelInv') return run(async () => { await local(`/api/admin/invites/${b.closest('[data-i]').dataset.i}`, {}); loadPeople(); });
+});
+
 /* ---------- boot ---------- */
 async function start() {
   $('#setup').hidden = true; $('#app').hidden = false; syncType();
@@ -3054,6 +3248,14 @@ window.tvOpen = (id, n, title) => {
 // The TMDB key also lives on the PC, so a new device (or the home-screen app, which
 // has its own storage on iPhone) starts without asking for it again.
 (async () => {
+  // signed in: pick a profile first if this device has none yet (and on the TV each time the app starts)
+  await loadMe();
+  if (ME?.profiles?.length) {
+    let picked = false; try { picked = !!sessionStorage.getItem('moonvies.picked'); } catch {}
+    const askTv = TV && ME.profiles.length > 1 && !picked && !new URLSearchParams(location.search).get('play');
+    if (!ME.profile && ME.profiles.length === 1) { await local('/api/me/profile', { id: ME.profiles[0].id }).catch(() => {}); await loadMe(); }
+    else if (!ME.profile || askTv) { await whoIsWatching(); await loadMe(); }
+  }
   const st = await local('/api/settings').catch(() => null);
   if (st?.desktop === false) SERVER_DESKTOP = false;
   if (!KEY && st?.tmdbKey) { KEY = st.tmdbKey; store.set('tmdb.key', KEY); }

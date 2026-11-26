@@ -20,3 +20,10 @@ tv-app/signing-password.txt
 *.idsig
 *.neon-backup
 tv-app/debloat-disabled.txt
+
+# accounts database and its one-time setup link
+moonvies.db
+moonvies.db-*
+setup-link.txt
+*.imported
+backups/
